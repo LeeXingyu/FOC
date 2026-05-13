@@ -65,6 +65,7 @@ void Error_Handler(void);
 #define LE0_GPIO_Port GPIOC
 #define COMM_IO2_Pin GPIO_PIN_0
 #define COMM_IO2_GPIO_Port GPIOC
+#define COMM_IO2_EXTI_IRQn EXTI0_IRQn
 #define CODER_CS_N2_Pin GPIO_PIN_1
 #define CODER_CS_N2_GPIO_Port GPIOC
 #define VSENB_Pin GPIO_PIN_2
@@ -117,8 +118,10 @@ void Error_Handler(void);
 #define DRV_INHA_GPIO_Port GPIOA
 #define COMM_IO1_Pin GPIO_PIN_15
 #define COMM_IO1_GPIO_Port GPIOA
+#define COMM_IO1_EXTI_IRQn EXTI15_10_IRQn
 #define COMM_INT_Pin GPIO_PIN_10
 #define COMM_INT_GPIO_Port GPIOC
+#define COMM_INT_EXTI_IRQn EXTI15_10_IRQn
 #define MCU_DI1_Pin GPIO_PIN_11
 #define MCU_DI1_GPIO_Port GPIOC
 #define CODER_CS_N1_Pin GPIO_PIN_12
@@ -135,6 +138,7 @@ void Error_Handler(void);
 #define DRV_EN_GPIO_Port GPIOB
 #define DRV_FAULT_N_Pin GPIO_PIN_7
 #define DRV_FAULT_N_GPIO_Port GPIOB
+#define DRV_FAULT_N_EXTI_IRQn EXTI9_5_IRQn
 #define DRV_INLA_Pin GPIO_PIN_9
 #define DRV_INLA_GPIO_Port GPIOB
 
