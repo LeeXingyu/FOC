@@ -24,12 +24,15 @@
 #include "dma.h"
 #include "spi.h"
 #include "tim.h"
-#include "usb.h"
+#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include "drv8353rs.h"
+#include "motor_control.h"
+#include "motor_parameters.h"
+#include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,7 +53,11 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-
+Axis_t g_axis;
+uint8_t uart_data_ready = 0;
+ADC_Rule_Data_t g_adc_Rule_ID_Tem;
+Comm_Protocol_t g_system_comm_mode = COMM_PROTO_UNKNOWN;
+//extern char g_uartRxBuffer[UART3_DMA_BUF_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -102,9 +109,30 @@ int main(void)
   MX_SPI3_Init();
   MX_TIM1_Init();
   MX_TIM3_Init();
-  MX_USB_PCD_Init();
   MX_CORDIC_Init();
   /* USER CODE BEGIN 2 */
+  SPI1_SwitchMode(SPI_MODE_KTH7824);
+  // 电机初始化
+  CDC_Transmit_FS ((uint8_t *)"Hello\r",6);
+  Motor_Control_Init();
+
+  // 驱动板初始化
+  DRV8353RS_Init();
+
+  ADC_Rule_Collect(&hadc2,&g_adc_Rule_ID_Tem);
+
+  if(g_system_comm_mode == COMM_PROTO_CAN)
+  {
+	  CANFD_INIT();
+  }
+  else if(g_system_comm_mode == COMM_PROTO_ETHERCAT)
+  {
+
+  }
+  if(SPI_MODE_KTH7824)
+  {
+
+  }
 
   /* USER CODE END 2 */
 
@@ -176,7 +204,85 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void ADC_Rule_Collect(ADC_HandleTypeDef* hadc, ADC_Rule_Data_t* data)
+{
+	uint16_t raw_val = 0;
+    // 1. 启动 ADC 规则组转换
+    if (HAL_ADC_Start(hadc) != HAL_OK)
+    {
+        // 启动失败处理
+        return;
+    }
 
+    // 2. 依次获取 4 个通道的数据
+    // 注意：在单次扫描模式下，HAL 库会自动按 Rank 顺序排列
+    // 我们只需要按顺序调用 Get_Value 即可
+
+    // --- Rank 1: Channel 17 (COMMID) ---
+    if (HAL_ADC_PollForConversion(hadc, 10) == HAL_OK) // 等待转换完成，超时10ms
+    {
+    	raw_val = HAL_ADC_GetValue(hadc) >> 4;
+    	if(raw_val > 2000)
+    	{
+    		data->raw_COMM_ID = 1;
+
+    	}
+    	else
+    	{
+    		data->raw_COMM_ID = 0;
+    	}
+    	g_system_comm_mode = data->raw_COMM_ID;
+
+    }
+    //需要根据热敏电阻系数进行计算得出实际温度
+    // --- Rank 2: Channel 12 ---
+    if (HAL_ADC_PollForConversion(hadc, 10) == HAL_OK)
+    {
+        data->raw_TSENA = HAL_ADC_GetValue(hadc);
+    }
+
+    // --- Rank 3: Channel 5 ---
+    if (HAL_ADC_PollForConversion(hadc, 10) == HAL_OK)
+    {
+        data->raw_TSENB = HAL_ADC_GetValue(hadc);
+    }
+
+    // --- Rank 4: Channel 11 ---
+    if (HAL_ADC_PollForConversion(hadc, 10) == HAL_OK)
+    {
+        data->raw_TSENC = HAL_ADC_GetValue(hadc);
+    }
+
+    // 3. 停止 ADC (可选，但建议加上以省电和确保状态清晰)
+    HAL_ADC_Stop(hadc);
+}
+
+void SPI1_SwitchMode(uint8_t mode)
+{
+    // 1. 先禁用 SPI 外设，否则无法修改配置
+    __HAL_SPI_DISABLE(&hspi3);
+
+    // 2. 根据模式修改 Init 结构体参数
+    if (mode == SENSOR_MODE_A)
+    {
+        // AS5047P 需要 Mode 1
+    	hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;  // 空闲时低电平
+    	hspi3.Init.CLKPhase = SPI_PHASE_2EDGE;      // 第二个边沿采样
+    }
+    else if (mode == SENSOR_MODE_K)
+    {
+        // KTH7824 需要 Mode 3
+    	hspi3.Init.CLKPolarity = SPI_POLARITY_HIGH; // 空闲时高电平
+    	hspi3.Init.CLKPhase = SPI_PHASE_2EDGE;      // 第二个边沿采样
+    }
+
+    // 3. 重新初始化 SPI 以应用更改
+    if (HAL_SPI_Init(&hspi3) != HAL_OK)
+    {
+        // 初始化失败处理 (可选)
+        Error_Handler();
+    }
+}
 /* USER CODE END 4 */
 
 /**

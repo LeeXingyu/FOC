@@ -22,7 +22,7 @@ static uint16_t FOC_Controller(void);
 void High_Frequency_Task()
 {
 	// 异步读取编码器数值
-	Start_Encoder_Read();
+	Start_Encoder_Read(0);
 
 	uint16_t uFOCreturn;
 

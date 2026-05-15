@@ -12,8 +12,8 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include "main.h"
 
-#define KTH7824
 //#define AS5047P
 
 #ifdef KTH7824

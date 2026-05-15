@@ -52,16 +52,16 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, MCU_DO1_Pin|LE0_Pin|CODER_CS_N2_Pin|CODER_CS_N1_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, MCU_DO1_Pin|LED0_Pin|CODER_CS_N2_Pin|CODER_CS_N1_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, COMM_RST_Pin|DRV_EN_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, COMM_RST_Pin|COMM_CS_N_Pin|DRV_EN_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(DRV_CS_N_GPIO_Port, DRV_CS_N_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : MCU_DO1_Pin LE0_Pin */
-  GPIO_InitStruct.Pin = MCU_DO1_Pin|LE0_Pin;
+  /*Configure GPIO pins : MCU_DO1_Pin LED0_Pin */
+  GPIO_InitStruct.Pin = MCU_DO1_Pin|LED0_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -87,6 +87,13 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(COMM_RST_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pins : COMM_CS_N_Pin DRV_EN_Pin */
+  GPIO_InitStruct.Pin = COMM_CS_N_Pin|DRV_EN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
   /*Configure GPIO pin : COMM_IO1_Pin */
   GPIO_InitStruct.Pin = COMM_IO1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
@@ -111,13 +118,6 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(DRV_CS_N_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : DRV_EN_Pin */
-  GPIO_InitStruct.Pin = DRV_EN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(DRV_EN_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : DRV_FAULT_N_Pin */
   GPIO_InitStruct.Pin = DRV_FAULT_N_Pin;

@@ -32,11 +32,49 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "mc_type.h"
+#include "canopen.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
 extern Axis_t g_axis;
+// 定义存放ADC数据的结构体
+typedef struct {
+    uint8_t raw_COMM_ID;    // 对应 adc2 Rank 1 (Channel 17)
+    uint16_t raw_TSENA;     // 对应 adc2 Rank 2 (Channel 12)
+    uint16_t raw_TSENB;     // 对应 adc2 Rank 3 (Channel 5)
+    uint16_t raw_TSENC;     // 对应 adc2 Rank 4 (Channel 11)
+
+    // 如果需要，可以在这里加计算后的浮点值
+    // float temperature_c;
+} ADC_Rule_Data_t;
+
+// 实例化一个全局变量（或者在 main 中定义传递指针）
+extern ADC_Rule_Data_t g_adc_Rule_ID_Tem;
+
+// 1. 定义通信协议的枚举类型
+typedef enum {
+    COMM_PROTO_CAN = 0,       // 对应 ADC ID 0
+    COMM_PROTO_ETHERCAT = 1,  // 对应 ADC ID 1
+    COMM_PROTO_UNKNOWN = 2    // 容错处理
+} Comm_Protocol_t;
+
+// 2. 定义一个全局变量来存储当前的通信状态
+// 加上 volatile 防止编译器过度优化，虽然这里主要是初始化赋值
+extern Comm_Protocol_t g_system_comm_mode;
+
+// 定义 SPI 模式
+typedef enum {
+    SENSOR_MODE_A = 1, // AS5047P 使用 Mode 1
+    SENSOR_MODE_K = 3  // KTH7824 使用 Mode 3
+} SensorMode_t;
+#define KTH7824
+#ifdef KTH7824
+#define SPI_MODE_KTH7824  3  // Mode 3: CPOL=1, CPHA=1 (2 Edge)
+#else
+#define AS5047P
+#define SPI_MODE_AS5047P  1  // Mode 1: CPOL=0, CPHA=1 (2 Edge)
+#endif
 /* USER CODE END ET */
 
 /* Exported constants --------------------------------------------------------*/
@@ -61,8 +99,8 @@ void Error_Handler(void);
 #define DRV_INLC_GPIO_Port GPIOC
 #define MCU_DO1_Pin GPIO_PIN_14
 #define MCU_DO1_GPIO_Port GPIOC
-#define LE0_Pin GPIO_PIN_15
-#define LE0_GPIO_Port GPIOC
+#define LED0_Pin GPIO_PIN_15
+#define LED0_GPIO_Port GPIOC
 #define COMM_IO2_Pin GPIO_PIN_0
 #define COMM_IO2_GPIO_Port GPIOC
 #define COMM_IO2_EXTI_IRQn EXTI0_IRQn
@@ -143,7 +181,8 @@ void Error_Handler(void);
 #define DRV_INLA_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
-
+void ADC_Rule_Collect(ADC_HandleTypeDef* hadc, ADC_Rule_Data_t* data);
+void SPI1_SwitchMode(uint8_t mode);
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
