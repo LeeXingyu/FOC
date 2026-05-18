@@ -1,4 +1,122 @@
 #include "canopen.h"
+#include "mc_interface.h"
+
+static MCP2518FD_Status_t s_mcp2518_status = {0};
+
+#define CAN_CMD_START_MOTOR      0x101U
+#define CAN_CMD_STOP_MOTOR       0x102U
+#define CAN_CMD_SET_SPEED_KP     0x103U
+#define CAN_CMD_SET_SPEED_KI     0x104U
+#define CAN_CMD_SET_REF_SPEED    0x105U
+#define CAN_CMD_SET_MODE_SPEED   0x106U
+#define CAN_CMD_SET_MODE_POS     0x107U
+#define CAN_CMD_SET_MODE_VF      0x108U
+
+typedef void (*CanCmdHandler)(const uint8_t *data, uint8_t len);
+
+typedef struct
+{
+    uint16_t sid;
+    CanCmdHandler handler;
+} CanCmdTable_t;
+
+static float Can_ReadFloatLE(const uint8_t *data, uint8_t len)
+{
+    union
+    {
+        float f;
+        uint8_t b[4];
+    } u = {0};
+
+    if ((data == NULL) || (len < 4U))
+    {
+        return 0.0f;
+    }
+
+    u.b[0] = data[0];
+    u.b[1] = data[1];
+    u.b[2] = data[2];
+    u.b[3] = data[3];
+    return u.f;
+}
+
+static void Can_StartMotor(const uint8_t *data, uint8_t len)
+{
+    (void)data;
+    (void)len;
+    if (g_axis.state == AXIS_STATE_IDLE)
+    {
+        MC_Start_Motor();
+    }
+}
+
+static void Can_StopMotor(const uint8_t *data, uint8_t len)
+{
+    (void)data;
+    (void)len;
+    MC_Stop_Motor();
+}
+
+static void Can_SetSpeedKp(const uint8_t *data, uint8_t len)
+{
+    MC_Set_Speed_Kp(Can_ReadFloatLE(data, len));
+}
+
+static void Can_SetSpeedKi(const uint8_t *data, uint8_t len)
+{
+    MC_Set_Speed_Ki(Can_ReadFloatLE(data, len));
+}
+
+static void Can_SetRefSpeed(const uint8_t *data, uint8_t len)
+{
+    MC_Set_Speed_Reference(Can_ReadFloatLE(data, len));
+}
+
+static void Can_SetModeSpeed(const uint8_t *data, uint8_t len)
+{
+    (void)data;
+    (void)len;
+    MC_Set_Control_Mode(CTRL_MODE_SPEED);
+}
+
+static void Can_SetModePosition(const uint8_t *data, uint8_t len)
+{
+    (void)data;
+    (void)len;
+    MC_Set_Control_Mode(CTRL_MODE_POSITION);
+}
+
+static void Can_SetModeVf(const uint8_t *data, uint8_t len)
+{
+    (void)data;
+    (void)len;
+    MC_Set_Control_Mode(CTRL_MODE_OPEN_LOOP);
+}
+
+static const CanCmdTable_t s_can_cmd_table[] =
+{
+    {CAN_CMD_START_MOTOR, Can_StartMotor},
+    {CAN_CMD_STOP_MOTOR, Can_StopMotor},
+    {CAN_CMD_SET_SPEED_KP, Can_SetSpeedKp},
+    {CAN_CMD_SET_SPEED_KI, Can_SetSpeedKi},
+    {CAN_CMD_SET_REF_SPEED, Can_SetRefSpeed},
+    {CAN_CMD_SET_MODE_SPEED, Can_SetModeSpeed},
+    {CAN_CMD_SET_MODE_POS, Can_SetModePosition},
+    {CAN_CMD_SET_MODE_VF, Can_SetModeVf}
+};
+
+static void Can_DispatchBySid(uint16_t sid, const uint8_t *data, uint8_t len)
+{
+    uint32_t i;
+    for (i = 0U; i < (sizeof(s_can_cmd_table) / sizeof(s_can_cmd_table[0])); i++)
+    {
+        if (s_can_cmd_table[i].sid == sid)
+        {
+            s_can_cmd_table[i].handler(data, len);
+            return;
+        }
+    }
+}
 
 HAL_StatusTypeDef DRV_SPI_TransferData(uint8_t spiDeviceIndex, uint8_t *SpiTxData,
 		uint8_t *SpiRxData, uint16_t spiTransferSize)
@@ -6,7 +124,7 @@ HAL_StatusTypeDef DRV_SPI_TransferData(uint8_t spiDeviceIndex, uint8_t *SpiTxDat
 	HAL_StatusTypeDef status;
 	HAL_GPIO_WritePin(COMM_CS_N_GPIO_Port, COMM_CS_N_Pin, GPIO_PIN_RESET);
 	status = HAL_SPI_TransmitReceive(&hspi2, SpiTxData, SpiRxData, spiTransferSize, 1000);
-	HAL_GPIO_WritePin(COMM_CS_N_GPIO_Port, COMM_CS_N_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(COMM_CS_N_GPIO_Port, COMM_CS_N_Pin, GPIO_PIN_SET);
 	return status;
 }
 
@@ -107,6 +225,7 @@ void MCP2518FD_TransmitMessageQueue(CANFDSPI_MODULE_ID index, uint16_t id, uint8
     txObj.bF.ctrl.FDF = 0;
 
     DRV_CANFDSPI_TransmitChannelLoad(index, CAN_FIFO_CH2, &txObj, data, n, true);
+    s_mcp2518_status.tx_frame_count++;
 
 }
 
@@ -115,16 +234,39 @@ void MCP2518FD_ReceiveMessage(CANFDSPI_MODULE_ID index, uint8_t nBytes)
 	CAN_RX_MSGOBJ rxObj;
 	CAN_RX_FIFO_EVENT rxFlags;
 	uint8_t rxdata[8];
+	uint8_t dlcDataBytes;
 
 	DRV_CANFDSPI_ReceiveChannelEventGet(index, CAN_FIFO_CH1, &rxFlags);
 
-	if(rxFlags & CAN_RX_FIFO_NOT_EMPTY_EVENT)
+	if ((rxFlags & CAN_RX_FIFO_OVERFLOW_EVENT) != 0U)
+	{
+		s_mcp2518_status.rx_overflow_count++;
+	}
+
+	while ((rxFlags & CAN_RX_FIFO_NOT_EMPTY_EVENT) != 0U)
 	{
 		DRV_CANFDSPI_ReceiveMessageGet(index, CAN_FIFO_CH1, &rxObj, rxdata, nBytes);
-		if (nBytes == 8)
+		dlcDataBytes = DRV_CANFDSPI_DlcToDataBytes((CAN_DLC)rxObj.bF.ctrl.DLC);
+		if (dlcDataBytes > 8U)
 		{
-			MCP2518FD_TransmitMessageQueue(1, rxObj.bF.id.SID, rxdata, nBytes);
+			dlcDataBytes = 8U;
 		}
+		s_mcp2518_status.rx_frame_count++;
+		s_mcp2518_status.last_rx_sid = rxObj.bF.id.SID;
+		s_mcp2518_status.last_rx_len = dlcDataBytes;
+		Can_DispatchBySid(rxObj.bF.id.SID, rxdata, dlcDataBytes);
+		DRV_CANFDSPI_ReceiveChannelEventGet(index, CAN_FIFO_CH1, &rxFlags);
 	}
+}
+
+void MCP2518FD_ProcessRxIrq(void)
+{
+	s_mcp2518_status.rx_irq_count++;
+	MCP2518FD_ReceiveMessage(DRV_CANFDSPI_INDEX_0, 8U);
+}
+
+MCP2518FD_Status_t MCP2518FD_GetStatus(void)
+{
+	return s_mcp2518_status;
 }
 

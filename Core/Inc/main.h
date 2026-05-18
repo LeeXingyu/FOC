@@ -62,6 +62,9 @@ typedef enum {
 // 2. 定义一个全局变量来存储当前的通信状态
 // 加上 volatile 防止编译器过度优化，虽然这里主要是初始化赋值
 extern Comm_Protocol_t g_system_comm_mode;
+extern volatile uint8_t g_comm_io1_irq_pending;
+extern volatile uint8_t g_comm_io2_irq_pending;
+extern volatile uint8_t g_comm_int_irq_pending;
 
 // 定义 SPI 模式
 typedef enum {

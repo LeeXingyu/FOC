@@ -33,10 +33,22 @@ HAL_StatusTypeDef DRV_SPI_TransferData(uint8_t spiSlaveDeviceIndex, uint8_t *Spi
 void MCP2518FD_TransmitMessageQueue(CANFDSPI_MODULE_ID index, uint16_t id, uint8_t *data, CAN_DLC len);
 void MCP2518FD_ReceiveMessage(CANFDSPI_MODULE_ID index, uint8_t nBytes);
 
+typedef struct
+{
+    uint32_t rx_irq_count;
+    uint32_t rx_frame_count;
+    uint32_t tx_frame_count;
+    uint32_t rx_overflow_count;
+    uint16_t last_rx_sid;
+    uint8_t  last_rx_len;
+} MCP2518FD_Status_t;
+
+void MCP2518FD_ProcessRxIrq(void);
+MCP2518FD_Status_t MCP2518FD_GetStatus(void);
+
 //========================================================//
 #ifdef	__cplusplus
 }
 #endif
 //========================================================//
 #endif
-

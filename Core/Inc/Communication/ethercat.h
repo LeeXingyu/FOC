@@ -8,6 +8,8 @@
 #ifndef INC_COMMUNICATION_ETHERCAT_H_
 #define INC_COMMUNICATION_ETHERCAT_H_
 
+void LAN9253_Init(void);
+void LAN9253_Process(void);
 
 
 #endif /* INC_COMMUNICATION_ETHERCAT_H_ */

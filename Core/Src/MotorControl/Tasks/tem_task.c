@@ -3,6 +3,7 @@
 #include "adc.h"
 #include "cmsis_os.h"
 #include "main.h"
+#include "Communication/mcp2518fd/can_telemetry.h"
 
 extern ADC_HandleTypeDef hadc2;
 
@@ -15,6 +16,7 @@ void Tem_Task(void *argument)
   for (;;)
   {
     ADC_Rule_Collect(&hadc2, &g_adc_Rule_ID_Tem);
+    CAN_Telemetry_UpdateFromAdc(&g_adc_Rule_ID_Tem);
 
     if (comm_id_locked == 0U)
     {

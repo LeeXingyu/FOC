@@ -30,6 +30,9 @@
 #include "main.h"
 #include "motor_parameters.h"
 #include "tem_task.h"
+#include "canopen.h"
+#include "ethercat.h"
+#include "Communication/mcp2518fd/can_telemetry.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,6 +52,9 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN Variables */
+volatile uint8_t g_comm_io1_irq_pending = 0U;
+volatile uint8_t g_comm_io2_irq_pending = 0U;
+volatile uint8_t g_comm_int_irq_pending = 0U;
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -58,7 +64,13 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 128 * 4
 };
-
+/* Definitions for Comm_Task */
+osThreadId_t Comm_TaskHandle;
+const osThreadAttr_t Comm_Task_attributes = {
+  .name = "Comm_Task",
+  .priority = (osPriority_t) osPriorityLow,
+  .stack_size = 128 * 4
+};
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
@@ -71,6 +83,7 @@ const osThreadAttr_t temTask_attributes = {
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
+void Communication_Task(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -103,7 +116,9 @@ void MX_FREERTOS_Init(void) {
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
-  
+
+  /* creation of Comm_Task */
+  Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   temTaskHandle = osThreadNew(Tem_Task, NULL, &temTask_attributes);
@@ -134,6 +149,49 @@ void StartDefaultTask(void *argument)
     osDelay(1);
   }
   /* USER CODE END StartDefaultTask */
+}
+
+/* USER CODE BEGIN Header_Communication_Task */
+/**
+* @brief Function implementing the Comm_Task thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_Communication_Task */
+void Communication_Task(void *argument)
+{
+  /* USER CODE BEGIN Communication_Task */
+  /* Infinite loop */
+  for(;;)
+  {
+    if (g_system_comm_mode == COMM_PROTO_CAN)
+    {
+      CAN_Telemetry_Service1ms();
+
+      if (g_comm_int_irq_pending != 0U)
+      {
+        g_comm_int_irq_pending = 0U;
+        MCP2518FD_ProcessRxIrq();
+      }
+
+      if (g_comm_io1_irq_pending != 0U)
+      {
+        g_comm_io1_irq_pending = 0U;
+      }
+
+      if (g_comm_io2_irq_pending != 0U)
+      {
+        g_comm_io2_irq_pending = 0U;
+      }
+    }
+    else if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
+    {
+      LAN9253_Process();
+    }
+
+    osDelay(1);
+  }
+  /* USER CODE END Communication_Task */
 }
 
 /* Private application code --------------------------------------------------*/

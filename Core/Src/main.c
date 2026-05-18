@@ -32,6 +32,8 @@
 #include "drv8353rs.h"
 #include "motor_control.h"
 #include "motor_parameters.h"
+#include "Communication/ethercat.h"
+#include "Communication/mcp2518fd/can_telemetry.h"
 #include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
@@ -57,9 +59,6 @@ Axis_t g_axis;
 uint8_t uart_data_ready = 0;
 ADC_Rule_Data_t g_adc_Rule_ID_Tem;
 Comm_Protocol_t g_system_comm_mode = COMM_PROTO_UNKNOWN;
-volatile uint8_t g_comm_io1_irq_pending = 0U;
-volatile uint8_t g_comm_io2_irq_pending = 0U;
-volatile uint8_t g_comm_int_irq_pending = 0U;
 //extern char g_uartRxBuffer[UART3_DMA_BUF_SIZE];
 /* USER CODE END PV */
 
@@ -127,10 +126,11 @@ int main(void)
   if(g_system_comm_mode == COMM_PROTO_CAN)
   {
 	  CANFD_INIT();
+	  CAN_Telemetry_Init();
   }
   else if(g_system_comm_mode == COMM_PROTO_ETHERCAT)
   {
-
+	  LAN9253_Init();
   }
   if(SPI_MODE_KTH7824)
   {
