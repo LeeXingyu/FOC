@@ -29,6 +29,7 @@ void Set_Kalman_Filter_RQ(KalmanFilter_t *kf, float r, float q)
 
 /*
  * 卡尔曼滤波计算
+ * 当前逻辑中的唯一核心作用是：抑制速度测量噪声，稳定速度误差，从而让 iq 给定更平稳。
  * */
 float Kalman_Filter_Calc(KalmanFilter_t *kf, float input)
 {
