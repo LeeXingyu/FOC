@@ -58,16 +58,16 @@ const osThreadAttr_t defaultTask_attributes = {
   .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 128 * 4
 };
+
+
+/* Private function prototypes -----------------------------------------------*/
+/* USER CODE BEGIN FunctionPrototypes */
 osThreadId_t temTaskHandle;
 const osThreadAttr_t temTask_attributes = {
   .name = "temTask",
   .priority = (osPriority_t) osPriorityLow,
   .stack_size = 128 * 4
 };
-
-/* Private function prototypes -----------------------------------------------*/
-/* USER CODE BEGIN FunctionPrototypes */
-
 /* USER CODE END FunctionPrototypes */
 
 void StartDefaultTask(void *argument);
@@ -103,9 +103,10 @@ void MX_FREERTOS_Init(void) {
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
-  temTaskHandle = osThreadNew(Tem_Task, NULL, &temTask_attributes);
+  
 
   /* USER CODE BEGIN RTOS_THREADS */
+  temTaskHandle = osThreadNew(Tem_Task, NULL, &temTask_attributes);
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 

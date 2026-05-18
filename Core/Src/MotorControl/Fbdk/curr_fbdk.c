@@ -15,7 +15,8 @@ PWMC_Handle_t pwmcHandle;
 
 CurrentFilter_t irFilter;
 CurrentFilter_t isFilter;
-
+#define ADC_SAMPLE_BLANK_TICKS   (80U)   // 死区/开关噪声避让，需实测调整
+#define ADC_SAMPLE_MARGIN_TICKS  (40U)   // 离周期边界最小裕量
 
 #define TIMxCCER_MASK_CH123        ((uint16_t)  (LL_TIM_CHANNEL_CH1|LL_TIM_CHANNEL_CH1N|\
                                                  LL_TIM_CHANNEL_CH2|LL_TIM_CHANNEL_CH2N|\
@@ -76,10 +77,66 @@ void Sampling_Init()
   * @param pHdl PWM组件当前实例的处理器
   * @rebval 错误状态错误状态
   */
-uint16_t Set_ADC_SampPoint_SectX(PWMC_Handle_t * pHandle)
-{
 
+
+
+static inline uint16_t min3_u16(uint16_t a, uint16_t b, uint16_t c)
+{
+    uint16_t m = (a < b) ? a : b;
+    return (m < c) ? m : c;
 }
+
+static inline uint16_t max3_u16(uint16_t a, uint16_t b, uint16_t c)
+{
+    uint16_t m = (a > b) ? a : b;
+    return (m > c) ? m : c;
+}
+
+/**
+ * @brief  根据当前三相占空比设置下一周期ADC注入采样点（TIM1 CH4）
+ * @note   适用于中心对齐PWM+三电阻采样的通用策略
+ */
+uint16_t Set_ADC_SampPoint_SectX(PWMC_Handle_t *pHandle)
+{
+    TIM_TypeDef *tim = pHandle->TIMx;
+    const uint16_t half_period = (uint16_t)(PWM_PERIOD_CYCLES >> 1);
+
+    // 当前三相比较值（已在Set_Phase_Duty中更新）
+    uint16_t ta = pHandle->uCntPhR;
+    uint16_t tb = pHandle->uCntPhS;
+    uint16_t tc = pHandle->uCntPhT;
+
+    uint16_t tmin = min3_u16(ta, tb, tc);
+    uint16_t tmax = max3_u16(ta, tb, tc);
+
+    // 有效采样窗口：避开开关沿 blanking
+    int32_t win_start = (int32_t)tmin + (int32_t)ADC_SAMPLE_BLANK_TICKS;
+    int32_t win_end   = (int32_t)tmax - (int32_t)ADC_SAMPLE_BLANK_TICKS;
+
+    uint16_t sample_tick;
+
+    if (win_end > win_start) {
+        // 优先取窗口中点
+        sample_tick = (uint16_t)((win_start + win_end) >> 1);
+    } else {
+        // 窗口太窄：退化到半周期中点
+        sample_tick = (uint16_t)(half_period >> 1);
+    }
+
+    // 边界夹紧
+    if (sample_tick < ADC_SAMPLE_MARGIN_TICKS) {
+        sample_tick = ADC_SAMPLE_MARGIN_TICKS;
+    }
+    if (sample_tick > (half_period - ADC_SAMPLE_MARGIN_TICKS)) {
+        sample_tick = (uint16_t)(half_period - ADC_SAMPLE_MARGIN_TICKS);
+    }
+
+    // 用CH4触发ADC injected（你的TIM1已配置TRGO=OC4REF）
+    LL_TIM_OC_SetCompareCH4(tim, sample_tick);
+
+    return MC_NO_FAULTS;
+}
+
 
 /**
   * @brief  执行空间矢量调制

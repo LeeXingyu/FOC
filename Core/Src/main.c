@@ -57,6 +57,9 @@ Axis_t g_axis;
 uint8_t uart_data_ready = 0;
 ADC_Rule_Data_t g_adc_Rule_ID_Tem;
 Comm_Protocol_t g_system_comm_mode = COMM_PROTO_UNKNOWN;
+volatile uint8_t g_comm_io1_irq_pending = 0U;
+volatile uint8_t g_comm_io2_irq_pending = 0U;
+volatile uint8_t g_comm_int_irq_pending = 0U;
 //extern char g_uartRxBuffer[UART3_DMA_BUF_SIZE];
 /* USER CODE END PV */
 
@@ -282,6 +285,34 @@ void SPI1_SwitchMode(uint8_t mode)
         // 初始化失败处理 (可选)
         Error_Handler();
     }
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	if (GPIO_Pin == DRV_FAULT_N_Pin)
+	{
+		g_axis.error = (AxisError_t)(g_axis.error | AXIS_ERROR_GATE_DRIVER);
+		g_axis.state = AXIS_STATE_FAULT_NOW;
+		return;
+	}
+
+	if (GPIO_Pin == COMM_IO1_Pin)
+	{
+		g_comm_io1_irq_pending = 1U;
+		return;
+	}
+
+	if (GPIO_Pin == COMM_IO2_Pin)
+	{
+		g_comm_io2_irq_pending = 1U;
+		return;
+	}
+
+	if (GPIO_Pin == COMM_INT_Pin)
+	{
+		g_comm_int_irq_pending = 1U;
+		return;
+	}
 }
 /* USER CODE END 4 */
 
