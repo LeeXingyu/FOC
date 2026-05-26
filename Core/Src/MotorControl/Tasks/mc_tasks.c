@@ -41,18 +41,17 @@ void High_Frequency_Task(void)
                 break;
 
             case AXIS_STATE_ENCODER_CALIB:
-                // 这里内部应同时使用ENC_ID_1、ENC_ID_2的值做校准
                 Offset_Encoder_Handle();
                 break;
 
             case AXIS_STATE_RUN:
-                // 这里内部应同时使用ENC_ID_1、ENC_ID_2的值做控制/观测
                 Run_Handle();
                 break;
 
             case AXIS_STATE_FAULT_NOW:
             case AXIS_STATE_FAULT_OVER:
                 SwitchOff_PWM(g_axis.pPWMCHandle);
+				DRV8353_UpdateFaultStatus();
                 break;
 
             default:
