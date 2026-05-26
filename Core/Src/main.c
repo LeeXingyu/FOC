@@ -113,7 +113,6 @@ int main(void)
   MX_TIM3_Init();
   MX_CORDIC_Init();
   /* USER CODE BEGIN 2 */
-  SPI1_SwitchMode(SPI_MODE_KTH7824);
   // 电机初始化
   CDC_Transmit_FS ((uint8_t *)"Hello\r",6);
   Motor_Control_Init();
@@ -122,19 +121,17 @@ int main(void)
   DRV8353RS_Init();
 
   ADC_Rule_Collect(&hadc2,&g_adc_Rule_ID_Tem);
-
+  DRV8353_CS_HIGH();
   if(g_system_comm_mode == COMM_PROTO_CAN)
   {
+    SPI2_SwitchDevice(SPI2_DEV_MCP2518FD);
 	  CANFD_INIT();
 	  CAN_Telemetry_Init();
   }
   else if(g_system_comm_mode == COMM_PROTO_ETHERCAT)
   {
+    SPI2_SwitchDevice(SPI2_DEV_LAN9253);
 	  LAN9253_Init();
-  }
-  if(SPI_MODE_KTH7824)
-  {
-
   }
 
   /* USER CODE END 2 */
@@ -258,33 +255,6 @@ void ADC_Rule_Collect(ADC_HandleTypeDef* hadc, ADC_Rule_Data_t* data)
 
     // 3. 停止 ADC (可选，但建议加上以省电和确保状态清晰)
     HAL_ADC_Stop(hadc);
-}
-
-void SPI1_SwitchMode(uint8_t mode)
-{
-    // 1. 先禁用 SPI 外设，否则无法修改配置
-    __HAL_SPI_DISABLE(&hspi3);
-
-    // 2. 根据模式修改 Init 结构体参数
-    if (mode == SENSOR_MODE_A)
-    {
-        // AS5047P 需要 Mode 1
-    	hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;  // 空闲时低电平
-    	hspi3.Init.CLKPhase = SPI_PHASE_2EDGE;      // 第二个边沿采样
-    }
-    else if (mode == SENSOR_MODE_K)
-    {
-        // KTH7824 需要 Mode 3
-    	hspi3.Init.CLKPolarity = SPI_POLARITY_HIGH; // 空闲时高电平
-    	hspi3.Init.CLKPhase = SPI_PHASE_2EDGE;      // 第二个边沿采样
-    }
-
-    // 3. 重新初始化 SPI 以应用更改
-    if (HAL_SPI_Init(&hspi3) != HAL_OK)
-    {
-        // 初始化失败处理 (可选)
-        Error_Handler();
-    }
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)

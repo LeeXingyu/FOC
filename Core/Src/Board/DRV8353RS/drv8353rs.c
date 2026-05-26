@@ -8,7 +8,7 @@
 #include "drv8353rs.h"
 
 
-extern SPI_HandleTypeDef hspi1;
+extern SPI_HandleTypeDef hspi2;
 
 DRV8353RSConfig_t drvConfig;
 
@@ -67,7 +67,7 @@ void Read_Fault(uint16_t *pData)
 	uint16_t uRxWord;
 
 	DRV8353_CS_LOW();
-	status = HAL_SPI_TransmitReceive(&hspi1, (uint8_t*)&uTxWord, (uint8_t*)&uRxWord, 1, 100);
+	status = HAL_SPI_TransmitReceive(&hspi2, (uint8_t*)&uTxWord, (uint8_t*)&uRxWord, 1, 100);
 	DRV8353_CS_HIGH();
 
 	*pData = uRxWord & 0x07FF;
@@ -84,7 +84,7 @@ HAL_StatusTypeDef Read_Register(uint8_t iRegAddr, uint16_t *pData)
 	uint16_t tx_word = 0x8000 | ((iRegAddr & 0x0F) << 11);
 
 	DRV8353_CS_LOW();
-	status = HAL_SPI_TransmitReceive(&hspi1, (uint8_t*)&tx_word, (uint8_t*)pData, 1, 100);
+	status = HAL_SPI_TransmitReceive(&hspi2, (uint8_t*)&tx_word, (uint8_t*)pData, 1, 100);
 	DRV8353_CS_HIGH();
 
 	*pData = (*pData) & 0x07FF;
@@ -102,7 +102,7 @@ HAL_StatusTypeDef Write_Register(uint8_t iRegAddr, uint16_t uData)
 	uint16_t rx_word = 0;
 
 	DRV8353_CS_LOW();
-	status = HAL_SPI_TransmitReceive(&hspi1, (uint8_t*)&tx_word, (uint8_t*)&rx_word, 1, 100);
+	status = HAL_SPI_TransmitReceive(&hspi2, (uint8_t*)&tx_word, (uint8_t*)&rx_word, 1, 100);
 	DRV8353_CS_HIGH();
 
 	return status;

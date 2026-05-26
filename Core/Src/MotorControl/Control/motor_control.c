@@ -115,7 +115,6 @@ void Motor_Control_Init(void)
     iqFilter.fAlpha = 0.5f;
 }
 
-
 /**
   * @brief  foc控制
   */

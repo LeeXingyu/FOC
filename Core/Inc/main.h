@@ -33,6 +33,7 @@ extern "C" {
 /* USER CODE BEGIN Includes */
 #include "mc_type.h"
 #include "canopen.h"
+#include "spi_switch.h"
 /* USER CODE END Includes */
 
 /* Exported types ------------------------------------------------------------*/
@@ -121,12 +122,12 @@ void Error_Handler(void);
 #define ISENA_GPIO_Port GPIOA
 #define COMM_ID_Pin GPIO_PIN_4
 #define COMM_ID_GPIO_Port GPIOA
-#define DRV_SCLK_Pin GPIO_PIN_5
-#define DRV_SCLK_GPIO_Port GPIOA
-#define DRV_MISO_Pin GPIO_PIN_6
-#define DRV_MISO_GPIO_Port GPIOA
-#define DRV_MOSI_Pin GPIO_PIN_7
-#define DRV_MOSI_GPIO_Port GPIOA
+#define CODER2_SCLK_Pin GPIO_PIN_5
+#define CODER2_SCLK_GPIO_Port GPIOA
+#define CODER2_MISO_Pin GPIO_PIN_6
+#define CODER2_MISO_GPIO_Port GPIOA
+#define CODER2_MOSI_Pin GPIO_PIN_7
+#define CODER2_MOSI_GPIO_Port GPIOA
 #define TSENB_Pin GPIO_PIN_4
 #define TSENB_GPIO_Port GPIOC
 #define TSENC_Pin GPIO_PIN_5
@@ -185,7 +186,6 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 void ADC_Rule_Collect(ADC_HandleTypeDef* hadc, ADC_Rule_Data_t* data);
-void SPI1_SwitchMode(uint8_t mode);
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus

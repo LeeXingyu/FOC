@@ -12,50 +12,53 @@
 #include "speed_pos_fbdk.h"
 #include "foc.h"
 #include "motor_parameters.h"
-
+#include "encoder.h"
 
 static uint16_t FOC_Controller(void);
 
 /**
  * @brief  高频任务（tim1定时器触发16khz+）
  */
-void High_Frequency_Task()
+void High_Frequency_Task(void)
 {
-	// 异步读取编码器数值
-	Start_Encoder_Read(0);
+    // 异步读取两个编码器（SPI1 + SPI3）
+    (void)Start_Encoder_Read(ENC_ID_MOTOR);
+    (void)Start_Encoder_Read(ENC_ID_LOAD);
 
-	uint16_t uFOCreturn;
+    uint16_t uFOCreturn;
 
-	// 已经初始化完毕
-	if (g_axis.bMCBootCompleted)
-	{
-		switch (g_axis.state)
-		{
-			case AXIS_STATE_IDLE:
-				// 空闲状态
-				Idle_Handle();
-				break;
-			case AXIS_STATE_OFFSET_CALIB:
-				// 电流校准
-				Offset_Calib_Handle();
-				break;
-			case AXIS_STATE_ENCODER_CALIB:
-				// 编码器校准
-				Offset_Encoder_Handle();
-				break;
-			case AXIS_STATE_RUN:
-				// 控制循环
-				Run_Handle();
-				break;
-			case AXIS_STATE_FAULT_NOW:
-			case AXIS_STATE_FAULT_OVER:
-				SwitchOff_PWM(g_axis.pPWMCHandle);
-				break;
-			default:
-				break;
-		}
-	}
+    // 已经初始化完毕
+    if (g_axis.bMCBootCompleted)
+    {
+        switch (g_axis.state)
+        {
+            case AXIS_STATE_IDLE:
+                Idle_Handle();
+                break;
 
+            case AXIS_STATE_OFFSET_CALIB:
+                Offset_Calib_Handle();
+                break;
+
+            case AXIS_STATE_ENCODER_CALIB:
+                // 这里内部应同时使用ENC_ID_1、ENC_ID_2的值做校准
+                Offset_Encoder_Handle();
+                break;
+
+            case AXIS_STATE_RUN:
+                // 这里内部应同时使用ENC_ID_1、ENC_ID_2的值做控制/观测
+                Run_Handle();
+                break;
+
+            case AXIS_STATE_FAULT_NOW:
+            case AXIS_STATE_FAULT_OVER:
+                SwitchOff_PWM(g_axis.pPWMCHandle);
+                break;
+
+            default:
+                break;
+        }
+    }
 }
 
 /**
@@ -129,7 +132,7 @@ void Offset_Calib_Handle()
 
 			g_axis.state = AXIS_STATE_ENCODER_CALIB;
 			g_axis.pPWMCHandle->bIsMeasuringOffset = false;
-			printf("Offset_Calib_Handle Over\n");
+			//printf("Offset_Calib_Handle Over\n");
 		}
 	}
 

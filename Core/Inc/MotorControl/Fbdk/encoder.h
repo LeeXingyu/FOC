@@ -12,6 +12,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include "spi.h"
 #include "main.h"
 
 //#define AS5047P
@@ -22,39 +23,28 @@
 #define ENCODER_COUNT 16384
 #endif
 
-#define IDLE 0
-#define SENDING 1
+typedef enum
+{
+    ENC_ID_MOTOR = 0,   // 绑定SPI1
+    ENC_ID_LOAD = 1,   // 绑定SPI3
+    ENC_ID_MAX
+} EncoderId_t;
 
-extern uint8_t g_spiState;
+typedef enum
+{
+    ENC_SPI_IDLE = 0,
+    ENC_SPI_BUSY
+} EncoderSpiState_t;
 
-extern uint16_t g_spiTxFrame;          // SPI 发送缓冲区
-extern uint16_t g_spiRxFrame;          // SPI 接收缓冲区
+void Init_Encoder(void);
+HAL_StatusTypeDef Start_Encoder_Read(EncoderId_t id);
+uint16_t Get_Encoder_Raw(EncoderId_t id);
+float Get_Encoder_AngleDeg(EncoderId_t id);
 
-/**
- * @brief  初始化编码器
- */
-void Init_Encoder();
-
-/**
- * @brief  开始读取编码器数据
- */
-void Start_Encoder_Read(uint8_t num);
-
-/**
- * @brief  获取编码器原始值
- */
-uint16_t Get_Encoder_Raw(uint8_t num);
-
-/**
- * @brief  获取编码器角度
- */
-uint8_t Get_Encoder_Angle(uint8_t num);
-
-/**
- * @brief  获取编码器spi片选拉高、拉低
- */
-void Encoder_CS_Low_1(uint8_t num);
-void Encoder_CS_High_1(uint8_t num);
-
+/* 在HAL_SPI_TxRxCpltCallback里调用 */
+void Encoder_SpiDmaCpltCallback(SPI_HandleTypeDef *hspi);
 
 #endif /* INC_MOTORCONTROL_FBDK_ENCODER_H_ */
+
+
+
