@@ -8,7 +8,8 @@
 #ifndef INC_MOTORCONTROL_TASKS_MC_TASKS_H_
 #define INC_MOTORCONTROL_TASKS_MC_TASKS_H_
 
-
+#include "param_identify.h"
+#include "mc_interface.h"
 
 /**
  * @brief  高频任务（tim1定时器触发16khz+）
@@ -25,5 +26,11 @@ void Medium_Frequency_Task();
  */
 void Axis_State_Machine();
 
+void MC_Calib_Init(void);
+MC_RetStatus_t MC_Calib_StartChain(void);
+MC_RetStatus_t MC_Calib_StartParam(ParamIdStep_t step);
+MC_RetStatus_t MC_Calib_StopParam(void);
+ParamIdState_t MC_Calib_GetParamState(void);
+const ParamIdResult_t *MC_Calib_GetParamResult(void);
 
 #endif /* INC_MOTORCONTROL_TASKS_MC_TASKS_H_ */

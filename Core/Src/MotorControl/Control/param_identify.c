@@ -11,6 +11,10 @@
 #include "stm32g4xx_hal_flash.h"
 #include "pidregdqx_current.h"
 
+static ParamIdHandle_t s_param_id_module;
+static bool s_param_id_flash_save_pending = false;
+static ParamIdFlashData_t s_param_id_flash_pending_data;
+
 /* ---------- Local helpers ---------- */
 static float ParamId_AbsF(float x)
 {
@@ -57,43 +61,30 @@ static float ParamId_GetSpeedRpm(void)
 {
     /* speedMeas_pu is electrical Hz / FREQUENCY_SCALE */
     float fe_hz = FIXP30_toF(g_axis.speedCtrl.speedMeas_pu) * FREQUENCY_SCALE;
-    return (60.0f * fe_hz) / (float)POLE_PAIR_NUM;
+    return (60.0f * fe_hz) / (float)MC_Get_Pole_Pairs();
 }
 
-static fixp30_t ParamId_GetIqPu(void)
+static float ParamId_GetElecHz(void)
 {
-    return g_axis.currCtrl.calcIdq.Q;
+    return FIXP30_toF(g_axis.speedCtrl.speedMeas_pu) * FREQUENCY_SCALE;
 }
 
-static fixp30_t ParamId_GetIdPu(void)
+static float ParamId_GetElecSpeedRadPs(void)
 {
-    return g_axis.currCtrl.calcIdq.D;
-}
-
-static fixp30_t ParamId_GetSpeedPu(void)
-{
-    return g_axis.speedCtrl.speedMeas_pu;
-}
-
-static fixp30_t ParamId_GetVbusPu(void)
-{
-    return g_axis.busVoltage;
+    return 2.0f * 3.1415926f * ParamId_GetElecHz();
 }
 
 static bool ParamId_CheckProtection(const ParamIdHandle_t *h)
 {
-    fixp30_t iqAbs_pu = FIXP30_abs(ParamId_GetIqPu());
-    fixp30_t idAbs_pu = FIXP30_abs(ParamId_GetIdPu());
-    fixp30_t speedAbs_pu = FIXP30_abs(ParamId_GetSpeedPu());
-    fixp30_t iLimit_pu = FIXP30(h->cfg.maxCurrentA / CURRENT_SCALE);
-    float fElecHzLimit = (h->cfg.maxSpeedRpm * (float)POLE_PAIR_NUM) / 60.0f;
-    fixp30_t speedLimit_pu = FIXP30(fElecHzLimit / FREQUENCY_SCALE);
+    float iqAbs = ParamId_AbsF(ParamId_GetIqA());
+    float idAbs = ParamId_AbsF(ParamId_GetIdA());
+    float speedAbsRpm = ParamId_AbsF(ParamId_GetSpeedRpm());
 
-    if (iqAbs_pu > iLimit_pu || idAbs_pu > iLimit_pu)
+    if (iqAbs > h->cfg.maxCurrentA || idAbs > h->cfg.maxCurrentA)
     {
         return false;
     }
-    if (speedAbs_pu > speedLimit_pu)
+    if (speedAbsRpm > h->cfg.maxSpeedRpm)
     {
         return false;
     }
@@ -117,7 +108,7 @@ static ParamIdStep_t ParamId_NextStep(ParamIdStep_t step)
 
 /* ---------- Flash persistence ---------- */
 #define PARAM_ID_FLASH_MAGIC        (0x50494431UL) /* "PID1" */
-#define PARAM_ID_FLASH_VERSION      (0x00010000UL)
+#define PARAM_ID_FLASH_VERSION      (0x00010001UL)
 /* User may move this address to a dedicated page in linker script. */
 #define PARAM_ID_FLASH_ADDR         (0x0803F800UL)
 #define PARAM_ID_FLASH_PAGE_SIZE    (2048UL)
@@ -220,6 +211,30 @@ static bool ParamId_FlashWritePage(uint32_t addr, const void *data, uint32_t byt
     return true;
 }
 
+static bool ParamId_FlashErasePage(uint32_t addr)
+{
+    FLASH_EraseInitTypeDef erase = {0};
+    uint32_t pageError = 0U;
+
+    if (HAL_FLASH_Unlock() != HAL_OK)
+    {
+        return false;
+    }
+
+    erase.TypeErase = FLASH_TYPEERASE_PAGES;
+    erase.Banks = FLASH_BANK_1;
+    erase.Page = (addr - FLASH_BASE) / PARAM_ID_FLASH_PAGE_SIZE;
+    erase.NbPages = 1U;
+    if (HAL_FLASHEx_Erase(&erase, &pageError) != HAL_OK)
+    {
+        (void)HAL_FLASH_Lock();
+        return false;
+    }
+
+    (void)HAL_FLASH_Lock();
+    return true;
+}
+
 /*
  * Apply current-loop PI gains from identified R/L parameter.
  * Priority: Lq -> average(Ld,Lq) -> Ld.
@@ -301,12 +316,40 @@ static void ParamId_BuildFlashData(ParamIdFlashData_t *out, const ParamIdResult_
 
     memset(out, 0, sizeof(*out));
     out->result = *result;
+    out->pole_pairs = (uint32_t)MC_Get_Pole_Pairs();
     out->curr_kp_si = PIDREGDQX_CURRENT_getKp_si(&g_axis.currCtrl.pid_IdIqX_obj);
     out->curr_wi_si = PIDREGDQX_CURRENT_getWi_si(&g_axis.currCtrl.pid_IdIqX_obj);
     if (jb != NULL)
     {
         out->mech_j = jb->estJ;
         out->mech_b = jb->estB;
+    }
+}
+
+static void ParamId_CopyResultToAxis(const ParamIdResult_t *result)
+{
+    if (result == NULL)
+    {
+        return;
+    }
+
+    if (result->validRs)
+    {
+        g_axis.fRs = result->rs_ohm;
+    }
+
+    if (result->validLq)
+    {
+        g_axis.fLs = result->lq_h;
+    }
+    else if (result->validLd)
+    {
+        g_axis.fLs = result->ld_h;
+    }
+
+    if (result->validKe)
+    {
+        g_axis.fKt = result->ke_v_per_rad_s;
     }
 }
 
@@ -424,9 +467,9 @@ void ParamId_Service(ParamIdHandle_t *h)
 {
     static float sumA = 0.0f;
     static float sumB = 0.0f;
+    static float sumCurrentA = 0.0f;
+    static float sumVoltageV = 0.0f;
     static float lastCurrA = 0.0f;
-    static int64_t sumIq_pu = 0;
-    static int64_t sumVq_pu = 0;
     static uint32_t lockStartRawNative = 0U;
     static ParamIdJBCache_t jbCache;
 
@@ -461,9 +504,9 @@ void ParamId_Service(ParamIdHandle_t *h)
     {
         sumA = 0.0f;
         sumB = 0.0f;
+        sumCurrentA = 0.0f;
+        sumVoltageV = 0.0f;
         lastCurrA = 0.0f;
-        sumIq_pu = 0;
-        sumVq_pu = 0;
 
         MC_Set_Control_Mode(CTRL_MODE_OPEN_LOOP);
         MC_Set_Speed_Reference(0.0f);
@@ -502,10 +545,8 @@ void ParamId_Service(ParamIdHandle_t *h)
         uint32_t nativeCounts = Get_Angle_CountNative();
         uint32_t rawDiff = ParamId_AngleRawDiffNative(nowRawNative, lockStartRawNative, nativeCounts);
         uint32_t rawLimit = ParamId_CompatDeltaToNative(h->cfg.lockMaxAngleDeltaRaw, nativeCounts);
-        fixp30_t speedAbs_pu = FIXP30_abs(ParamId_GetSpeedPu());
-        float fElecHzLock = (h->cfg.lockMaxSpeedRpm * (float)POLE_PAIR_NUM) / 60.0f;
-        fixp30_t speedLockLimit_pu = FIXP30(fElecHzLock / FREQUENCY_SCALE);
-        if (rawDiff > rawLimit || speedAbs_pu > speedLockLimit_pu)
+        float speedAbsRpm = ParamId_AbsF(ParamId_GetSpeedRpm());
+        if (rawDiff > rawLimit || speedAbsRpm > h->cfg.lockMaxSpeedRpm)
         {
             ParamId_ForceSafeOutput();
             h->state = PARAM_ID_STATE_FAULT;
@@ -526,31 +567,29 @@ void ParamId_Service(ParamIdHandle_t *h)
         {
             /* Lock rotor and inject small q-axis duty, then estimate Rs from V/I. */
             float targetA = h->cfg.rsCurrentA;
-            fixp30_t iq_pu = ParamId_GetIqPu();
-            fixp30_t vbus_pu = ParamId_GetVbusPu();
-            fixp30_t dutyQ_pu = FIXP30(0.03f);
+            const float dutyQ = 0.03f;
 
             Duty_Ddq_t duty = {0};
             duty.D = FIXP30(0.0f);
-            duty.Q = dutyQ_pu;
+            duty.Q = FIXP30(dutyQ);
             MC_Set_Duty_Cycle(duty);
 
             if (h->subTick > h->cfg.settleTicks)
             {
-                sumIq_pu += (int64_t)iq_pu;
-                sumVq_pu += (int64_t)FIXP30_mpy(vbus_pu, dutyQ_pu);
+                sumCurrentA += ParamId_GetIqA();
+                sumVoltageV += ParamId_GetVbusV() * dutyQ;
             }
 
             if (h->subTick >= (uint16_t)(h->cfg.settleTicks + h->cfg.sampleTicks))
             {
-                fixp30_t iAvg_pu = (fixp30_t)(sumIq_pu / (int64_t)h->cfg.sampleTicks);
-                fixp30_t vAvg_pu = (fixp30_t)(sumVq_pu / (int64_t)h->cfg.sampleTicks);
-                float iAvg = FIXP30_toF(iAvg_pu) * CURRENT_SCALE;
-                float vAvg = FIXP30_toF(vAvg_pu) * VOLTAGE_SCALE;
+                float sampleCount = (float)h->cfg.sampleTicks;
+                float iAvg = sumCurrentA / sampleCount;
+                float vAvg = sumVoltageV / sampleCount;
                 if (ParamId_AbsF(iAvg) > (0.1f * targetA))
                 {
                     h->result.rs_ohm = vAvg / iAvg;
                     h->result.validRs = true;
+                    g_axis.fRs = h->result.rs_ohm;
                 }
 
                 h->subTick = 0U;
@@ -575,18 +614,18 @@ void ParamId_Service(ParamIdHandle_t *h)
             bool isD = (h->activeStep == PARAM_ID_STEP_LD);
             float stepA = isD ? h->cfg.ldStepCurrentA : h->cfg.lqStepCurrentA;
             (void)stepA;
-            fixp30_t dutyStep_pu = FIXP30(0.02f);
+            const float dutyStep = 0.02f;
 
             Duty_Ddq_t duty = {0};
             if (isD)
             {
-                duty.D = (h->subTick < h->cfg.settleTicks) ? FIXP30(0.0f) : dutyStep_pu;
+                duty.D = (h->subTick < h->cfg.settleTicks) ? FIXP30(0.0f) : FIXP30(dutyStep);
                 duty.Q = FIXP30(0.0f);
             }
             else
             {
                 duty.D = FIXP30(0.0f);
-                duty.Q = (h->subTick < h->cfg.settleTicks) ? FIXP30(0.0f) : dutyStep_pu;
+                duty.Q = (h->subTick < h->cfg.settleTicks) ? FIXP30(0.0f) : FIXP30(dutyStep);
             }
             MC_Set_Duty_Cycle(duty);
 
@@ -602,7 +641,7 @@ void ParamId_Service(ParamIdHandle_t *h)
                 float dI = currA - lastCurrA;
                 float dt = 1.0f / (float)TF_REGULATION_RATE;
                 float didt = dI / dt;
-                float v = FIXP30_toF(FIXP30_mpy(ParamId_GetVbusPu(), dutyStep_pu)) * VOLTAGE_SCALE;
+                float v = ParamId_GetVbusV() * dutyStep;
                 float rs = h->result.validRs ? h->result.rs_ohm : 0.0f;
                 float l = 0.0f;
 
@@ -625,11 +664,13 @@ void ParamId_Service(ParamIdHandle_t *h)
                     {
                         h->result.ld_h = lavg;
                         h->result.validLd = true;
+                        g_axis.fLs = lavg;
                     }
                     else
                     {
                         h->result.lq_h = lavg;
                         h->result.validLq = true;
+                        g_axis.fLs = lavg;
                     }
                 }
 
@@ -662,7 +703,7 @@ void ParamId_Service(ParamIdHandle_t *h)
                 float vq = ParamId_GetVbusV() * FIXP30_toF(g_axis.currCtrl.outIdq.Q);
                 float iq = ParamId_GetIqA();
                 float rs = h->result.validRs ? h->result.rs_ohm : 0.0f;
-                float we = 2.0f * 3.1415926f * FIXP30_toF(g_axis.speedCtrl.speedMeas_pu) * FREQUENCY_SCALE;
+                float we = ParamId_GetElecSpeedRadPs();
                 if (ParamId_AbsF(we) > 1e-3f)
                 {
                     float ke = (vq - rs * iq) / we;
@@ -685,27 +726,21 @@ void ParamId_Service(ParamIdHandle_t *h)
                 {
                     h->result.ke_v_per_rad_s = sumA / sumB;
                     h->result.validKe = true;
+                    g_axis.fKt = h->result.ke_v_per_rad_s;
                 }
 
-                /* Finalize J/B estimation and keep result in axis parameter placeholders. */
+                /* Finalize J/B estimation. */
                 ParamId_JBSolve(&jbCache);
-                if (jbCache.estJ > 0.0f)
-                {
-                    g_axis.fKt = jbCache.estJ; /* temporary runtime stash for J */
-                }
-                if (jbCache.estB > 0.0f)
-                {
-                    g_axis.fLs = jbCache.estB; /* temporary runtime stash for B */
-                }
 
                 /* Apply PI retune from identified R/L immediately after full identification. */
                 ParamId_ApplyCurrentPiFromResult(&h->result);
 
-                /* Build a complete persistence snapshot (including J/B). */
+                /* Build a complete persistence snapshot (including pole pairs and J/B). */
                 {
                     ParamIdFlashData_t snapshot;
                     ParamId_BuildFlashData(&snapshot, &h->result, &jbCache);
-                    (void)snapshot;
+                    s_param_id_flash_pending_data = snapshot;
+                    s_param_id_flash_save_pending = true;
                 }
 
                 MC_Set_Speed_Reference(0.0f);
@@ -758,4 +793,95 @@ bool ParamId_LoadFromFlash(ParamIdFlashData_t *data)
 
     *data = *blob;
     return true;
+}
+
+bool ParamId_ClearFlash(void)
+{
+    s_param_id_flash_save_pending = false;
+    memset(&s_param_id_flash_pending_data, 0, sizeof(s_param_id_flash_pending_data));
+    return ParamId_FlashErasePage(PARAM_ID_FLASH_ADDR);
+}
+
+bool ParamId_ApplyFlashDataToAxis(const ParamIdFlashData_t *data)
+{
+    if (data == NULL)
+    {
+        return false;
+    }
+
+    s_param_id_module.result = data->result;
+
+    if (data->pole_pairs != 0U)
+    {
+        g_axis.uPolePairs = (uint8_t)data->pole_pairs;
+    }
+
+    ParamId_CopyResultToAxis(&data->result);
+
+    if (data->curr_kp_si > 0.0f)
+    {
+        PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, data->curr_kp_si);
+    }
+
+    if (data->curr_wi_si > 0.0f)
+    {
+        PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, data->curr_wi_si);
+    }
+
+    return true;
+}
+
+bool ParamId_RestoreFromFlashToAxis(void)
+{
+    ParamIdFlashData_t data;
+
+    if (!ParamId_LoadFromFlash(&data))
+    {
+        return false;
+    }
+
+    return ParamId_ApplyFlashDataToAxis(&data);
+}
+
+void ParamId_ModuleInit(void)
+{
+    ParamId_Init(&s_param_id_module);
+    s_param_id_flash_save_pending = false;
+    memset(&s_param_id_flash_pending_data, 0, sizeof(s_param_id_flash_pending_data));
+}
+
+ParamIdRet_t ParamId_ModuleStart(ParamIdStep_t step)
+{
+    return ParamId_Start(&s_param_id_module, step);
+}
+
+ParamIdRet_t ParamId_ModuleStop(void)
+{
+    return ParamId_Stop(&s_param_id_module);
+}
+
+void ParamId_ModuleService(void)
+{
+    ParamId_Service(&s_param_id_module);
+}
+
+void ParamId_ModuleBackgroundService(void)
+{
+    if (!s_param_id_flash_save_pending)
+    {
+        return;
+    }
+
+    (void)ParamId_SaveToFlash(&s_param_id_flash_pending_data);
+    s_param_id_flash_save_pending = false;
+}
+
+ParamIdState_t ParamId_ModuleGetState(void)
+{
+    return ParamId_GetState(&s_param_id_module);
+}
+
+const ParamIdResult_t *ParamId_ModuleGetResult(void)
+{
+    return ParamId_GetResult(&s_param_id_module);
 }

@@ -12,6 +12,8 @@
 #include "motor_parameters.h"
 #include "fixpmath.h"
 #include "mc_interface.h"
+#include "mc_tasks.h"
+#include "param_identify.h"
 #include "encoder.h"
 
 extern TIM_HandleTypeDef htim1;
@@ -81,6 +83,7 @@ void Motor_Control_Init(void)
 
 	// 卡尔曼滤波初始化
 	Kalman_Filter_Init(&g_motorSpeedKalmanFilter, KF_R, KF_Q);
+	MC_Calib_Init();
 
 
 	/* 开环参数初始化 */
@@ -99,9 +102,17 @@ void Motor_Control_Init(void)
 	g_axis.posCtrl.uOffsetAngleRawNative = 0U;
 	g_axis.posCtrl.uCalibCount = 0;
 	g_axis.posCtrl.bCalibFlag = false;
+	g_axis.fRs = 0.0f;
+	g_axis.fLs = 0.0f;
+	g_axis.fKt = 0.0f;
+	g_axis.uPolePairs = (uint8_t)POLE_PAIR_NUM;
+
+	// 先按默认值初始化控制器，再尝试用 Flash 中的历史标定值覆盖。
+	PID_All_Init();
+	(void)ParamId_RestoreFromFlashToAxis();
 
 	// 速度相关
-	float fElectricalFreqHz = ((float)POLE_PAIR_NUM * 50.0f) / 60.0f;
+	float fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * 50.0f) / 60.0f;
 	g_axis.speedCtrl.speedRef_pu = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0F);
 
@@ -111,9 +122,6 @@ void Motor_Control_Init(void)
 	// 初始化状态
 	g_axis.state = AXIS_STATE_IDLE;
 	g_axis.bMCBootCompleted = true;
-
-	// 初始化pid
-	PID_All_Init();
 
     iqFilter.fAlpha = 0.5f;
 }
@@ -295,8 +303,6 @@ void Open_Loop_Control()
 	FIXP_CosSin_t cossinPwm;
 	FIXP30_CosSinPU(anglePark_pu, &cossinPwm);
 
-	g_axis.currCtrl.refIdq.D = FIXP30(0.0f);
-	g_axis.currCtrl.refIdq.Q = FIXP30(0.1f);
 
 	// 反park变换
 	Inv_Park_Duty(g_axis.currCtrl.refIdq, &cossinPwm, &dutyAb);

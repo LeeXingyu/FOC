@@ -13,8 +13,10 @@
 #include "foc.h"
 #include "motor_parameters.h"
 #include "encoder.h"
+#include "param_identify.h"
 
 static uint16_t FOC_Controller(void);
+static void Param_Calib_Handle(void);
 
 /**
  * @brief  高频任务（tim1定时器触发16khz+）
@@ -47,6 +49,10 @@ void High_Frequency_Task(void)
                 Offset_Encoder_Handle();
                 break;
 
+            case AXIS_STATE_PARAM_CALIB:
+                Param_Calib_Handle();
+                break;
+
             case AXIS_STATE_RUN:
                 Run_Handle();
                 break;
@@ -69,6 +75,8 @@ void High_Frequency_Task(void)
  */
 void Medium_Frequency_Task()
 {
+	
+
 	if (g_axis.bMCBootCompleted)
 	{
 		// 圈数计算
@@ -77,6 +85,8 @@ void Medium_Frequency_Task()
 		// 测速
 		Calc_Speed(&g_axis.speedCtrl.speedMeas_pu);
 	}
+	
+	ParamId_ModuleBackgroundService();
 }
 
 /**
@@ -85,6 +95,73 @@ void Medium_Frequency_Task()
 void Axis_State_Machine()
 {
 
+}
+
+void MC_Calib_Init(void)
+{
+	ParamId_ModuleInit();
+}
+
+MC_RetStatus_t MC_Calib_StartChain(void)
+{
+	if (g_axis.state != AXIS_STATE_IDLE)
+	{
+		return MC_FAILED;
+	}
+
+	g_axis.state = AXIS_STATE_OFFSET_CALIB;
+	return MC_SUCCESS;
+}
+
+MC_RetStatus_t MC_Calib_StartParam(ParamIdStep_t step)
+{
+	ParamIdRet_t ret;
+
+	if (step != PARAM_ID_STEP_ALL)
+	{
+		return MC_FAILED;
+	}
+
+	if (g_axis.state != AXIS_STATE_RUN)
+	{
+		return MC_FAILED;
+	}
+
+	ret = ParamId_ModuleStart(step);
+	if (ret != PARAM_ID_OK)
+	{
+		return MC_FAILED;
+	}
+
+	g_axis.state = AXIS_STATE_PARAM_CALIB;
+	return MC_SUCCESS;
+}
+
+MC_RetStatus_t MC_Calib_StopParam(void)
+{
+	ParamIdRet_t ret = ParamId_ModuleStop();
+
+	if ((ret != PARAM_ID_OK) && (ret != PARAM_ID_ERR_NOT_RUNNING))
+	{
+		return MC_FAILED;
+	}
+
+	if (g_axis.state == AXIS_STATE_PARAM_CALIB)
+	{
+		g_axis.state = AXIS_STATE_RUN;
+	}
+
+	return MC_SUCCESS;
+}
+
+ParamIdState_t MC_Calib_GetParamState(void)
+{
+	return ParamId_ModuleGetState();
+}
+
+const ParamIdResult_t *MC_Calib_GetParamResult(void)
+{
+	return ParamId_ModuleGetResult();
 }
 
 /**
@@ -183,7 +260,33 @@ void Offset_Encoder_Handle()
 		g_axis.posCtrl.uOffsetAngleRawNative = Get_Angle_RawNative();
 		g_axis.posCtrl.uCalibCount = 0;
 		g_axis.posCtrl.bCalibFlag = true;
+		if (ParamId_ModuleStart(PARAM_ID_STEP_ALL) == PARAM_ID_OK)
+		{
+			g_axis.state = AXIS_STATE_PARAM_CALIB;
+		}
+		else
+		{
+			g_axis.error = (AxisError_t)(g_axis.error | AXIS_ERROR_CALIBRATION_FAILED);
+			g_axis.state = AXIS_STATE_FAULT_NOW;
+		}
+	}
+}
+
+static void Param_Calib_Handle(void)
+{
+	ParamIdState_t state;
+
+	ParamId_ModuleService();
+	state = ParamId_ModuleGetState();
+
+	if (state == PARAM_ID_STATE_DONE)
+	{
 		g_axis.state = AXIS_STATE_RUN;
+	}
+	else if (state == PARAM_ID_STATE_FAULT)
+	{
+		g_axis.error = (AxisError_t)(g_axis.error | AXIS_ERROR_CALIBRATION_FAILED);
+		g_axis.state = AXIS_STATE_FAULT_NOW;
 	}
 }
 
@@ -236,4 +339,3 @@ inline uint16_t FOC_Controller(void)
 	SetPhaseDuty(g_axis.pPWMCHandle);
 	return;
 }
-

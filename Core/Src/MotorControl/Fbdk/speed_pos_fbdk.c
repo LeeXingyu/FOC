@@ -5,6 +5,7 @@
 #include "encoder.h"
 #include "main.h"
 #include "mc_math.h"
+#include "mc_interface.h"
 #include "motor_parameters.h"
 
 static uint32_t s_prevEncoderRawNative = 0U;
@@ -27,13 +28,13 @@ void Calc_Speed(fixp30_t *pSpeed)
         sfirstSample = 0U;
     }
 
-    fElectricalFreqHz = ((float)POLE_PAIR_NUM * g_axis.fbdk.fSpeedKalman) / 60.0f;
+    fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * g_axis.fbdk.fSpeedKalman) / 60.0f;
     *pSpeed = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
 }
 
 void Get_Speed(fixp30_t *pSpeed)
 {
-    float fElectricalFreqHz = ((float)POLE_PAIR_NUM * g_axis.fbdk.fSpeedKalman) / 60.0f;
+    float fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * g_axis.fbdk.fSpeedKalman) / 60.0f;
     *pSpeed = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
 }
 
@@ -69,7 +70,7 @@ void Get_Angle(fixp30_t *pAngle)
     }
 
     fElecAngleUnwrapped = (float)tempRaw / (float)sumCount;
-    fMechAngle = fElecAngleUnwrapped * (float)POLE_PAIR_NUM;
+    fMechAngle = fElecAngleUnwrapped * (float)MC_Get_Pole_Pairs();
     *pAngle = FIXP30(fmodf(fMechAngle, 1.0f));
 }
 

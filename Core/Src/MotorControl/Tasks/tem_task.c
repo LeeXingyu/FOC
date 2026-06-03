@@ -91,6 +91,6 @@ void Tem_Task(void *argument)
       comm_id_locked = 1U;
     }
 
-    osDelay(1000);
+    osDelay(3000);
   }
 }

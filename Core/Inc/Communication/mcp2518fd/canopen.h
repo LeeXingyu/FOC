@@ -39,11 +39,15 @@ typedef struct
     uint32_t rx_frame_count;
     uint32_t tx_frame_count;
     uint32_t rx_overflow_count;
+    uint32_t rx_invalid_count;
+    uint32_t rx_reject_count;
     uint16_t last_rx_sid;
     uint8_t  last_rx_len;
+    uint8_t  last_rx_status;
 } MCP2518FD_Status_t;
 
 void MCP2518FD_ProcessRxIrq(void);
+void MCP2518FD_Service1ms(void);
 MCP2518FD_Status_t MCP2518FD_GetStatus(void);
 
 //========================================================//

@@ -70,4 +70,7 @@ void MC_Set_Speed_Ki(float fKi);
   */
 void MC_Set_Speed_Reference(float fRefSpeed);
 
+uint8_t MC_Get_Pole_Pairs(void);
+MC_RetStatus_t MC_Set_Pole_Pairs(uint8_t polePairs);
+
 #endif /* INC_MOTORCONTROL_MC_INTERFACE_H_ */

@@ -11,6 +11,8 @@
 #include "can_telemetry.h"
 #include "canopen.h"
 #include "mc_interface.h"
+#include "mc_tasks.h"
+#include "param_identify.h"
 #include "curr_fbdk.h"
 #include "speed_pos_fbdk.h"
 #include "motor_control.h"
@@ -28,6 +30,27 @@ static ADC_Rule_Data_t s_adc_shadow;
 static uint8_t s_tick_div = 0U;
 static uint8_t s_frame_index = 0U;
 
+#define CAN_RSP_CMD_STATUS      0x181U
+#define CAN_RSP_PARAM_STATE     0x182U
+#define CAN_RSP_PARAM_RESULT_1  0x183U
+#define CAN_RSP_PARAM_RESULT_2  0x184U
+
+#define CAN_TX_QUEUE_DEPTH      16U
+
+#define CAN_TELEMETRY_PERIOD_MS  100U
+
+typedef struct
+{
+    uint16_t sid;
+    uint8_t len;
+    uint8_t data[8];
+} CAN_Telemetry_Frame_t;
+
+static CAN_Telemetry_Frame_t s_tx_queue[CAN_TX_QUEUE_DEPTH];
+static uint8_t s_tx_queue_head = 0U;
+static uint8_t s_tx_queue_tail = 0U;
+static uint8_t s_tx_queue_count = 0U;
+
 static void CAN_Telemetry_SendFrame(uint16_t sid, const uint8_t *payload, uint8_t len)
 {
     uint8_t txbuf[8] = {0};
@@ -40,6 +63,22 @@ static void CAN_Telemetry_SendFrame(uint16_t sid, const uint8_t *payload, uint8_
 
     (void)memcpy(txbuf, payload, copy_len);
     MCP2518FD_TransmitMessageQueue(DRV_CANFDSPI_INDEX_0, sid, txbuf, DRV_CANFDSPI_DataBytesToDlc(copy_len));
+}
+
+static uint8_t CAN_Telemetry_ParamValidBits(const ParamIdResult_t *r)
+{
+    uint8_t bits = 0U;
+
+    if (r == NULL)
+    {
+        return 0U;
+    }
+
+    if (r->validRs) { bits |= 0x01U; }
+    if (r->validLd) { bits |= 0x02U; }
+    if (r->validLq) { bits |= 0x04U; }
+    if (r->validKe) { bits |= 0x08U; }
+    return bits;
 }
 
 static void CAN_Telemetry_PackU16(uint8_t *dst, uint16_t value)
@@ -58,11 +97,57 @@ static void CAN_Telemetry_PackFloat(uint8_t *dst, float value)
     dst[3] = u.b[3];
 }
 
+static bool CAN_Telemetry_DequeueFrame(CAN_Telemetry_Frame_t *frame)
+{
+    if ((frame == NULL) || (s_tx_queue_count == 0U))
+    {
+        return false;
+    }
+
+    *frame = s_tx_queue[s_tx_queue_head];
+    s_tx_queue_head++;
+    if (s_tx_queue_head >= CAN_TX_QUEUE_DEPTH)
+    {
+        s_tx_queue_head = 0U;
+    }
+    s_tx_queue_count--;
+    return true;
+}
+
+static void CAN_Telemetry_QueueParamSnapshotCommon(const ParamIdResult_t *result,
+                                                   uint8_t paramState,
+                                                   uint8_t polePairs)
+{
+    uint8_t stateFrame[8] = {0};
+    uint8_t resultFrame1[8] = {0};
+    uint8_t resultFrame2[8] = {0};
+
+    stateFrame[0] = (uint8_t)g_axis.state;
+    stateFrame[1] = paramState;
+    stateFrame[2] = polePairs;
+    stateFrame[3] = CAN_Telemetry_ParamValidBits(result);
+    CAN_Telemetry_PackU16(&stateFrame[4], (uint16_t)polePairs);
+    (void)CAN_Telemetry_EnqueueFrame(CAN_RSP_PARAM_STATE, stateFrame, 8U);
+
+    if (result != NULL)
+    {
+        CAN_Telemetry_PackFloat(&resultFrame1[0], result->rs_ohm);
+        CAN_Telemetry_PackFloat(&resultFrame1[4], result->ld_h);
+        CAN_Telemetry_PackFloat(&resultFrame2[0], result->lq_h);
+        CAN_Telemetry_PackFloat(&resultFrame2[4], result->ke_v_per_rad_s);
+        (void)CAN_Telemetry_EnqueueFrame(CAN_RSP_PARAM_RESULT_1, resultFrame1, 8U);
+        (void)CAN_Telemetry_EnqueueFrame(CAN_RSP_PARAM_RESULT_2, resultFrame2, 8U);
+    }
+}
+
 void CAN_Telemetry_Init(void)
 {
     memset(&s_adc_shadow, 0, sizeof(s_adc_shadow));
     s_tick_div = 0U;
     s_frame_index = 0U;
+    s_tx_queue_head = 0U;
+    s_tx_queue_tail = 0U;
+    s_tx_queue_count = 0U;
 }
 
 void CAN_Telemetry_UpdateFromAdc(const ADC_Rule_Data_t *pAdcData)
@@ -73,8 +158,73 @@ void CAN_Telemetry_UpdateFromAdc(const ADC_Rule_Data_t *pAdcData)
     }
 }
 
+bool CAN_Telemetry_EnqueueFrame(uint16_t sid, const uint8_t *payload, uint8_t len)
+{
+    CAN_Telemetry_Frame_t *slot;
+    uint8_t copy_len = (len > 8U) ? 8U : len;
+
+    if (s_tx_queue_count >= CAN_TX_QUEUE_DEPTH)
+    {
+        return false;
+    }
+
+    slot = &s_tx_queue[s_tx_queue_tail];
+    slot->sid = sid;
+    slot->len = copy_len;
+    memset(slot->data, 0, sizeof(slot->data));
+    if ((payload != NULL) && (copy_len > 0U))
+    {
+        (void)memcpy(slot->data, payload, copy_len);
+    }
+
+    s_tx_queue_tail++;
+    if (s_tx_queue_tail >= CAN_TX_QUEUE_DEPTH)
+    {
+        s_tx_queue_tail = 0U;
+    }
+    s_tx_queue_count++;
+    return true;
+}
+
+void CAN_Telemetry_QueueCmdStatus(uint16_t cmdSid, uint8_t status, uint8_t extra, uint8_t rxLen)
+{
+    uint8_t payload[8] = {0};
+
+    CAN_Telemetry_PackU16(&payload[0], cmdSid);
+    payload[2] = status;
+    payload[3] = (uint8_t)g_axis.state;
+    payload[4] = extra;
+    payload[5] = (uint8_t)MC_Calib_GetParamState();
+    payload[6] = rxLen;
+    payload[7] = MC_Get_Pole_Pairs();
+    (void)CAN_Telemetry_EnqueueFrame(CAN_RSP_CMD_STATUS, payload, 8U);
+}
+
+void CAN_Telemetry_RequestRuntimeParamSnapshot(void)
+{
+    CAN_Telemetry_QueueParamSnapshotCommon(MC_Calib_GetParamResult(),
+                                          (uint8_t)MC_Calib_GetParamState(),
+                                          MC_Get_Pole_Pairs());
+}
+
+bool CAN_Telemetry_RequestFlashParamSnapshot(void)
+{
+    ParamIdFlashData_t data;
+
+    if (!ParamId_LoadFromFlash(&data))
+    {
+        return false;
+    }
+
+    CAN_Telemetry_QueueParamSnapshotCommon(&data.result,
+                                          (uint8_t)PARAM_ID_STATE_DONE,
+                                          (uint8_t)data.pole_pairs);
+    return true;
+}
+
 void CAN_Telemetry_Service1ms(void)
 {
+    CAN_Telemetry_Frame_t frameOut;
     uint8_t frame[8] = {0};
 
     if (g_system_comm_mode != COMM_PROTO_CAN)
@@ -82,8 +232,14 @@ void CAN_Telemetry_Service1ms(void)
         return;
     }
 
+    if (CAN_Telemetry_DequeueFrame(&frameOut))
+    {
+        CAN_Telemetry_SendFrame(frameOut.sid, frameOut.data, frameOut.len);
+        return;
+    }
+
     s_tick_div++;
-    if (s_tick_div < 1U)
+    if (s_tick_div < CAN_TELEMETRY_PERIOD_MS)
     {
         return;
     }

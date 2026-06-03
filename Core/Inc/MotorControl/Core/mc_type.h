@@ -53,9 +53,10 @@ typedef enum {
     AXIS_STATE_IDLE             = 1,	// 待机状态，PWM 输出关闭（disarm），电机无力矩。
     AXIS_STATE_OFFSET_CALIB     = 2,   	// ADC 校准
 	AXIS_STATE_ENCODER_CALIB	= 3,	// 编码器校准
-	AXIS_STATE_RUN      		= 4,   	// 控制循环,正常工作状态，根据 ctrl_mode 分三个子模式
-    AXIS_STATE_FAULT_NOW        = 5,	// 故障，进入后立即 disarm（关 PWM 输出），防止炸管
-    AXIS_STATE_FAULT_OVER       = 6,	// 故障已发生但条件消失，等待用户主动确认（发送 Fault Reset 指令，对应 CiA 402 的 Controlword bit7）后才能回到 IDLE
+	AXIS_STATE_PARAM_CALIB      = 4,    // 电机参数校准
+	AXIS_STATE_RUN      		= 5,   	// 控制循环,正常工作状态，根据 ctrl_mode 分三个子模式
+    AXIS_STATE_FAULT_NOW        = 6,	// 故障，进入后立即 disarm（关 PWM 输出），防止炸管
+    AXIS_STATE_FAULT_OVER       = 7,	// 故障已发生但条件消失，等待用户主动确认（发送 Fault Reset 指令，对应 CiA 402 的 Controlword bit7）后才能回到 IDLE
 } AxisState_t;
 
 /* ── 错误码（位域）── */

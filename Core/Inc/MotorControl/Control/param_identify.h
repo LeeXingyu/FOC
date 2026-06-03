@@ -109,6 +109,7 @@ typedef struct
      * 3) identified mechanical parameters
      */
     ParamIdResult_t result;
+    uint32_t pole_pairs;
     float curr_kp_si;
     float curr_wi_si;
     /* Mechanical parameters identified from speed/torque data */
@@ -129,6 +130,17 @@ ParamIdRet_t ParamId_SetConfig(ParamIdHandle_t *h, const ParamIdConfig_t *cfg);
 /* Flash storage API */
 bool ParamId_SaveToFlash(const ParamIdFlashData_t *data);
 bool ParamId_LoadFromFlash(ParamIdFlashData_t *data);
+bool ParamId_ClearFlash(void);
+bool ParamId_ApplyFlashDataToAxis(const ParamIdFlashData_t *data);
+bool ParamId_RestoreFromFlashToAxis(void);
+
+void ParamId_ModuleInit(void);
+ParamIdRet_t ParamId_ModuleStart(ParamIdStep_t step);
+ParamIdRet_t ParamId_ModuleStop(void);
+void ParamId_ModuleService(void);
+void ParamId_ModuleBackgroundService(void);
+ParamIdState_t ParamId_ModuleGetState(void);
+const ParamIdResult_t *ParamId_ModuleGetResult(void);
 
 
 #endif /* INC_MOTORCONTROL_CONTROL_PARAM_IDENTIFY_H_ */

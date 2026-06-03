@@ -9,6 +9,16 @@
 #include "main.h"
 #include "motor_parameters.h"
 
+static uint8_t MC_PolePairsOrDefault(void)
+{
+	if (g_axis.uPolePairs == 0U)
+	{
+		return (uint8_t)POLE_PAIR_NUM;
+	}
+
+	return g_axis.uPolePairs;
+}
+
 /**
   * @brief  电机开始运行
   */
@@ -89,6 +99,22 @@ void MC_Set_Speed_Ki(float fKi)
 
 void MC_Set_Speed_Reference(float fRefSpeed)
 {
-	float fFreqHz = (fRefSpeed * POLE_PAIR_NUM) / 60.0f;
+	float fFreqHz = (fRefSpeed * (float)MC_PolePairsOrDefault()) / 60.0f;
 	g_axis.speedCtrl.speedRef_pu = FIXP30( fFreqHz / FREQUENCY_SCALE);
+}
+
+uint8_t MC_Get_Pole_Pairs(void)
+{
+	return MC_PolePairsOrDefault();
+}
+
+MC_RetStatus_t MC_Set_Pole_Pairs(uint8_t polePairs)
+{
+	if (polePairs == 0U)
+	{
+		return MC_FAILED;
+	}
+
+	g_axis.uPolePairs = polePairs;
+	return MC_SUCCESS;
 }

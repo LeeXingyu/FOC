@@ -118,7 +118,7 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of Comm_Task */
-  //Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
+  Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   temTaskHandle = osThreadNew(Tem_Task, NULL, &temTask_attributes);
@@ -162,6 +162,7 @@ void Communication_Task(void *argument)
     if (g_system_comm_mode == COMM_PROTO_CAN)
     {
       CAN_Telemetry_Service1ms();
+      MCP2518FD_Service1ms();
 
       if (g_comm_int_irq_pending != 0U)
       {
