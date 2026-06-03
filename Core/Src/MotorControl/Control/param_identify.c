@@ -158,11 +158,31 @@ static bool ParamId_IsLockRequiredStep(ParamIdStep_t step)
     return (step == PARAM_ID_STEP_RS || step == PARAM_ID_STEP_LD || step == PARAM_ID_STEP_LQ);
 }
 
-static uint16_t ParamId_AngleRawDiff(uint16_t a, uint16_t b)
+static uint32_t ParamId_AngleRawDiffNative(uint32_t a, uint32_t b, uint32_t counts)
 {
-    uint16_t d = (a >= b) ? (a - b) : (uint16_t)(65535U - b + a + 1U);
-    uint16_t rev = (uint16_t)(65535U - d + 1U);
+    uint32_t d;
+    uint32_t rev;
+
+    if (counts <= 1U)
+    {
+        return 0U;
+    }
+
+    a %= counts;
+    b %= counts;
+    d = (a >= b) ? (a - b) : (counts - b + a);
+    rev = counts - d;
     return (d < rev) ? d : rev;
+}
+
+static uint32_t ParamId_CompatDeltaToNative(uint16_t compatDelta, uint32_t nativeCounts)
+{
+    if (nativeCounts <= 1U)
+    {
+        return 0U;
+    }
+
+    return (uint32_t)(((uint64_t)compatDelta * (uint64_t)(nativeCounts - 1U)) / 65535ULL);
 }
 
 static bool ParamId_FlashWritePage(uint32_t addr, const void *data, uint32_t bytes)
@@ -407,7 +427,7 @@ void ParamId_Service(ParamIdHandle_t *h)
     static float lastCurrA = 0.0f;
     static int64_t sumIq_pu = 0;
     static int64_t sumVq_pu = 0;
-    static uint16_t lockStartRaw = 0U;
+    static uint32_t lockStartRawNative = 0U;
     static ParamIdJBCache_t jbCache;
 
     if (h == NULL)
@@ -456,7 +476,7 @@ void ParamId_Service(ParamIdHandle_t *h)
         h->subTick = 0U;
         if (ParamId_IsLockRequiredStep(h->activeStep))
         {
-            lockStartRaw = Get_Angle_Raw();
+            lockStartRawNative = Get_Angle_RawNative();
             h->state = PARAM_ID_STATE_LOCK_CHECK;
         }
         else
@@ -478,12 +498,14 @@ void ParamId_Service(ParamIdHandle_t *h)
          * 2) Speed must stay near zero.
          * Both must hold for lockCheckTicks.
          */
-        uint16_t nowRaw = Get_Angle_Raw();
-        uint16_t rawDiff = ParamId_AngleRawDiff(nowRaw, lockStartRaw);
+        uint32_t nowRawNative = Get_Angle_RawNative();
+        uint32_t nativeCounts = Get_Angle_CountNative();
+        uint32_t rawDiff = ParamId_AngleRawDiffNative(nowRawNative, lockStartRawNative, nativeCounts);
+        uint32_t rawLimit = ParamId_CompatDeltaToNative(h->cfg.lockMaxAngleDeltaRaw, nativeCounts);
         fixp30_t speedAbs_pu = FIXP30_abs(ParamId_GetSpeedPu());
         float fElecHzLock = (h->cfg.lockMaxSpeedRpm * (float)POLE_PAIR_NUM) / 60.0f;
         fixp30_t speedLockLimit_pu = FIXP30(fElecHzLock / FREQUENCY_SCALE);
-        if (rawDiff > h->cfg.lockMaxAngleDeltaRaw || speedAbs_pu > speedLockLimit_pu)
+        if (rawDiff > rawLimit || speedAbs_pu > speedLockLimit_pu)
         {
             ParamId_ForceSafeOutput();
             h->state = PARAM_ID_STATE_FAULT;

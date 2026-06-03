@@ -9,6 +9,7 @@
 #define INC_MOTORCONTROL_FBDK_SPEED_POS_FBDK_H_
 
 
+#include <stdint.h>
 #include "Utils/Fixp/fixpmath.h"
 
 /**
@@ -42,6 +43,8 @@ void Get_Angle(fixp30_t *pAngle);
   *
  */
 uint16_t Get_Angle_Raw();
+uint32_t Get_Angle_RawNative();
+uint32_t Get_Angle_CountNative();
 
 /**
  * @brief  M法测速+低通滤波

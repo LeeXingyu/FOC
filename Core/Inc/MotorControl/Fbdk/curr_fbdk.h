@@ -81,7 +81,7 @@ typedef struct
   fixp30_t 			Udcbus_in_pu;                           /*!< @brief DC bus level expressed in per-unit */
   bool 				pwmControlEnable;                           /*!< @brief PWM control flag status */
 } CurrCtrlInput_t;
-#define ADC_INJ_TEST
+//#define ADC_INJ_TEST
 #ifdef ADC_INJ_TEST
 typedef struct
 {

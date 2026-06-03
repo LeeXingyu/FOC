@@ -12,6 +12,7 @@
 #include "motor_parameters.h"
 #include "fixpmath.h"
 #include "mc_interface.h"
+#include "encoder.h"
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
@@ -72,6 +73,7 @@ void Motor_Control_Init(void)
 
 	// 电流、电压采样初始化（定时器、采样配置）
 	Sampling_Init();
+	Init_Encoder();
 
 	// 定时器开启
 	HAL_TIM_Base_Start_IT(&htim1);
@@ -94,6 +96,7 @@ void Motor_Control_Init(void)
 
 	// 位置相关
 	g_axis.posCtrl.uOffsetAngleRaw = 0;
+	g_axis.posCtrl.uOffsetAngleRawNative = 0U;
 	g_axis.posCtrl.uCalibCount = 0;
 	g_axis.posCtrl.bCalibFlag = false;
 

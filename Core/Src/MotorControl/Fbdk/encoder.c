@@ -2,7 +2,6 @@
 #include "speed_pos_type.h"
 #include "stm32g4xx_hal.h"
 
-
 extern SPI_HandleTypeDef hspi1;
 extern SPI_HandleTypeDef hspi3;
 
@@ -11,12 +10,14 @@ typedef struct
     SPI_HandleTypeDef *hspi;
     GPIO_TypeDef *cs_port;
     uint16_t cs_pin;
-
+    EncoderType_t type;
     volatile EncoderSpiState_t state;
-    volatile uint16_t tx_frame;
-    volatile uint16_t rx_frame;
-    volatile uint16_t raw;
+    volatile uint16_t raw_compat;
+    volatile uint32_t raw_native;
     volatile float angle_deg;
+    AS5047P_Handle_t as5047p;
+    KTH7824_Handle_t kth7824;
+    MT6835_Handle_t mt6835;
 } EncoderDev_t;
 
 static EncoderDev_t s_enc[ENC_ID_MAX] =
@@ -25,53 +26,183 @@ static EncoderDev_t s_enc[ENC_ID_MAX] =
         .hspi = &hspi1,
         .cs_port = CODER_CS_N2_GPIO_Port,
         .cs_pin = CODER_CS_N2_Pin,
+        .type = MOTOR_ENCODER_TYPE,
         .state = ENC_SPI_IDLE,
-        .tx_frame = 0U,
-        .rx_frame = 0U,
-        .raw = 0U,
-        .angle_deg = 0.0f
+        .raw_compat = 0U,
+        .raw_native = 0U,
+        .angle_deg = 0.0f,
+        .as5047p = {
+            .hspi = &hspi1,
+            .cs_port = CODER_CS_N2_GPIO_Port,
+            .cs_pin = CODER_CS_N2_Pin,
+            .baudrate_prescaler = SPI_BAUDRATEPRESCALER_32
+        },
+        .kth7824 = {
+            .hspi = &hspi1,
+            .cs_port = CODER_CS_N2_GPIO_Port,
+            .cs_pin = CODER_CS_N2_Pin,
+            .baudrate_prescaler = SPI_BAUDRATEPRESCALER_32
+        },
+        .mt6835 = {
+            .hspi = &hspi1,
+            .cs_port = CODER_CS_N2_GPIO_Port,
+            .cs_pin = CODER_CS_N2_Pin,
+            .baudrate_prescaler = SPI_BAUDRATEPRESCALER_32,
+            .verify_crc = false
+        }
     },
     [ENC_ID_LOAD] = {
         .hspi = &hspi3,
         .cs_port = CODER_CS_N1_GPIO_Port,
         .cs_pin = CODER_CS_N1_Pin,
+        .type = LOAD_ENCODER_TYPE,
         .state = ENC_SPI_IDLE,
-        .tx_frame = 0U,
-        .rx_frame = 0U,
-        .raw = 0U,
-        .angle_deg = 0.0f
+        .raw_compat = 0U,
+        .raw_native = 0U,
+        .angle_deg = 0.0f,
+        .as5047p = {
+            .hspi = &hspi3,
+            .cs_port = CODER_CS_N1_GPIO_Port,
+            .cs_pin = CODER_CS_N1_Pin,
+            .baudrate_prescaler = SPI_BAUDRATEPRESCALER_32
+        },
+        .kth7824 = {
+            .hspi = &hspi3,
+            .cs_port = CODER_CS_N1_GPIO_Port,
+            .cs_pin = CODER_CS_N1_Pin,
+            .baudrate_prescaler = SPI_BAUDRATEPRESCALER_32
+        },
+        .mt6835 = {
+            .hspi = &hspi3,
+            .cs_port = CODER_CS_N1_GPIO_Port,
+            .cs_pin = CODER_CS_N1_Pin,
+            .baudrate_prescaler = SPI_BAUDRATEPRESCALER_32,
+            .verify_crc = false
+        }
     }
 };
 
-static inline void Encoder_CS_Low(EncoderId_t id)
+static uint32_t Encoder_CountFromType(EncoderType_t type)
 {
-    HAL_GPIO_WritePin(s_enc[id].cs_port, s_enc[id].cs_pin, GPIO_PIN_RESET);
+    switch (type)
+    {
+        case ENC_TYPE_AS5047P:
+            return AS5047P_ANGLE_COUNTS;
+
+        case ENC_TYPE_MT6835:
+            return MT6835_ANGLE_COUNTS;
+
+        case ENC_TYPE_KTH7824:
+        default:
+            return KTH7824_ANGLE_COUNTS;
+    }
 }
 
-static inline void Encoder_CS_High(EncoderId_t id)
+static uint16_t Encoder_NormalizeToCompat16(uint32_t raw_native, uint32_t native_counts)
 {
-    HAL_GPIO_WritePin(s_enc[id].cs_port, s_enc[id].cs_pin, GPIO_PIN_SET);
+    if (native_counts <= 1U)
+    {
+        return 0U;
+    }
+
+    raw_native %= native_counts;
+    return (uint16_t)(((uint64_t)raw_native * 65535ULL) / (uint64_t)(native_counts - 1U));
+}
+
+static HAL_StatusTypeDef Encoder_InitDevice(EncoderDev_t *pdev)
+{
+    switch (pdev->type)
+    {
+        case ENC_TYPE_AS5047P:
+            return AS5047P_Init(&pdev->as5047p);
+
+        case ENC_TYPE_MT6835:
+            return MT6835_Init(&pdev->mt6835);
+
+        case ENC_TYPE_KTH7824:
+        default:
+            return KTH7824_Init(&pdev->kth7824);
+    }
+}
+
+static HAL_StatusTypeDef Encoder_StartRead(EncoderDev_t *pdev)
+{
+    switch (pdev->type)
+    {
+        case ENC_TYPE_AS5047P:
+            return AS5047P_StartAngleReadDma(&pdev->as5047p);
+
+        case ENC_TYPE_MT6835:
+            return MT6835_StartAngleReadDma(&pdev->mt6835);
+
+        case ENC_TYPE_KTH7824:
+        default:
+            return KTH7824_StartAngleReadDma(&pdev->kth7824);
+    }
+}
+
+static HAL_StatusTypeDef Encoder_CompleteRead(EncoderDev_t *pdev, SPI_HandleTypeDef *hspi)
+{
+    HAL_StatusTypeDef st;
+
+    switch (pdev->type)
+    {
+        case ENC_TYPE_AS5047P:
+            st = AS5047P_SpiDmaCpltCallback(&pdev->as5047p, hspi);
+            if (st == HAL_OK)
+            {
+                pdev->raw_native = pdev->as5047p.last_raw;
+                pdev->angle_deg = pdev->as5047p.last_angle_deg;
+            }
+            return st;
+
+        case ENC_TYPE_MT6835:
+            st = MT6835_SpiDmaCpltCallback(&pdev->mt6835, hspi);
+            if (st == HAL_OK)
+            {
+                pdev->raw_native = pdev->mt6835.last_frame.angle_raw21;
+                pdev->angle_deg = pdev->mt6835.last_frame.angle_deg;
+            }
+            return st;
+
+        case ENC_TYPE_KTH7824:
+        default:
+            st = KTH7824_SpiDmaCpltCallback(&pdev->kth7824, hspi);
+            if (st == HAL_OK)
+            {
+                pdev->raw_native = pdev->kth7824.last_raw;
+                pdev->angle_deg = pdev->kth7824.last_angle_deg;
+            }
+            return st;
+    }
+}
+
+static void Encoder_UpdateCompatFeedback(EncoderDev_t *pdev)
+{
+    pdev->raw_compat = Encoder_NormalizeToCompat16(pdev->raw_native, Encoder_CountFromType(pdev->type));
 }
 
 void Init_Encoder(void)
 {
     uint8_t i;
+
     g_axis.fbdk.fAngle = 0.0f;
     g_axis.fbdk.uAngleRaw = 0U;
+    g_axis.fbdk.uAngleRawNative = 0U;
     g_axis.fbdk.fSpeed = 0.0f;
     g_axis.fbdk.fSpeedKalman = 0.0f;
     g_axis.fbdk.fSpeedPll = 0.0f;
     g_axis.fbdk.fOffsetAngle = 0.0f;
     g_axis.fbdk.uOffsetAngleRaw = 0U;
+    g_axis.fbdk.uOffsetAngleRawNative = 0U;
 
     for (i = 0U; i < ENC_ID_MAX; i++)
     {
         s_enc[i].state = ENC_SPI_IDLE;
-        s_enc[i].tx_frame = 0U;
-        s_enc[i].rx_frame = 0U;
-        s_enc[i].raw = 0U;
+        s_enc[i].raw_compat = 0U;
+        s_enc[i].raw_native = 0U;
         s_enc[i].angle_deg = 0.0f;
-        Encoder_CS_High((EncoderId_t)i);
+        (void)Encoder_InitDevice(&s_enc[i]);
     }
 }
 
@@ -79,37 +210,20 @@ HAL_StatusTypeDef Start_Encoder_Read(EncoderId_t id)
 {
     HAL_StatusTypeDef ret;
 
-    if ((id >= ENC_ID_MAX) || (s_enc[id].state != ENC_SPI_IDLE))
+    if (id >= ENC_ID_MAX)
+    {
+        return HAL_ERROR;
+    }
+
+    if (s_enc[id].state != ENC_SPI_IDLE)
     {
         return HAL_BUSY;
     }
 
     s_enc[id].state = ENC_SPI_BUSY;
-    Encoder_CS_Low(id);
-
-#ifdef KTH7824
-    s_enc[id].tx_frame = 0x0000U;
-    ret = HAL_SPI_TransmitReceive_DMA(s_enc[id].hspi,
-                                      (uint16_t *)&s_enc[id].tx_frame,
-                                      (uint16_t *)&s_enc[id].rx_frame,
-                                      1U);
-#elif defined(AS5047P)
-    s_enc[id].tx_frame = 0xFFFFU;
-    ret = HAL_SPI_TransmitReceive_DMA(s_enc[id].hspi,
-                                      (uint16_t *)&s_enc[id].tx_frame,
-                                      (uint16_t *)&s_enc[id].rx_frame,
-                                      1U);
-#else
-    s_enc[id].tx_frame = 0x0000U;
-    ret = HAL_SPI_TransmitReceive_DMA(s_enc[id].hspi,
-                                      (uint16_t *)&s_enc[id].tx_frame,
-                                      (uint16_t *)&s_enc[id].rx_frame,
-                                      1U);
-#endif
-
+    ret = Encoder_StartRead(&s_enc[id]);
     if (ret != HAL_OK)
     {
-        Encoder_CS_High(id);
         s_enc[id].state = ENC_SPI_IDLE;
     }
 
@@ -122,7 +236,43 @@ uint16_t Get_Encoder_Raw(EncoderId_t id)
     {
         return 0U;
     }
-    return s_enc[id].raw;
+
+    return s_enc[id].raw_compat;
+}
+
+uint16_t Get_Encoder_RawCompat(EncoderId_t id)
+{
+    return Get_Encoder_Raw(id);
+}
+
+uint32_t Get_Encoder_RawNative(EncoderId_t id)
+{
+    if (id >= ENC_ID_MAX)
+    {
+        return 0U;
+    }
+
+    return s_enc[id].raw_native;
+}
+
+uint32_t Get_Encoder_NativeCount(EncoderId_t id)
+{
+    if (id >= ENC_ID_MAX)
+    {
+        return 0U;
+    }
+
+    return Encoder_CountFromType(s_enc[id].type);
+}
+
+EncoderType_t Get_Encoder_Type(EncoderId_t id)
+{
+    if (id >= ENC_ID_MAX)
+    {
+        return ENC_TYPE_KTH7824;
+    }
+
+    return s_enc[id].type;
 }
 
 float Get_Encoder_AngleDeg(EncoderId_t id)
@@ -131,50 +281,36 @@ float Get_Encoder_AngleDeg(EncoderId_t id)
     {
         return 0.0f;
     }
+
     return s_enc[id].angle_deg;
 }
 
 void Encoder_SpiDmaCpltCallback(SPI_HandleTypeDef *hspi)
 {
     uint8_t i;
+
     for (i = 0U; i < ENC_ID_MAX; i++)
     {
         if ((s_enc[i].hspi == hspi) && (s_enc[i].state == ENC_SPI_BUSY))
         {
-            uint16_t raw = s_enc[i].rx_frame;
+            if (Encoder_CompleteRead(&s_enc[i], hspi) == HAL_OK)
+            {
+                Encoder_UpdateCompatFeedback(&s_enc[i]);
 
-#ifdef KTH7824
-            s_enc[i].raw = raw;
-            s_enc[i].angle_deg = ((float)raw) * (360.0f / 65535.0f);
-#elif defined(AS5047P)
-            raw &= 0x3FFFU;
-            s_enc[i].raw = raw;
-            s_enc[i].angle_deg = ((float)raw) * (360.0f / 16383.0f);
-#else
-            s_enc[i].raw = raw;
-            s_enc[i].angle_deg = ((float)raw) * (360.0f / 65535.0f);
-#endif
+                if ((EncoderId_t)i == ENC_ID_MOTOR)
+                {
+                    g_axis.fbdk.uAngleRaw = s_enc[i].raw_compat;
+                    g_axis.fbdk.uAngleRawNative = s_enc[i].raw_native;
+                    g_axis.fbdk.fAngle = s_enc[i].angle_deg;
+                }
+            }
 
-            Encoder_CS_High((EncoderId_t)i);
             s_enc[i].state = ENC_SPI_IDLE;
-
-        if ((EncoderId_t)i == ENC_ID_MOTOR)
-        {
-            g_axis.fbdk.uAngleRaw = s_enc[i].raw;
-            g_axis.fbdk.fAngle    = s_enc[i].angle_deg;
-        }
-        // else if ((EncoderId_t)i == ENC_ID_LOAD)
-        // {
-        //     g_loadAngleRaw  = s_enc[i].raw;
-        //     g_loadAngleDeg  = s_enc[i].angle_deg;
-        //     g_loadDataValid = 1U;
-        // }
             return;
         }
     }
 }
 
-/* 放到你原有HAL回调里 */
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     Encoder_SpiDmaCpltCallback(hspi);

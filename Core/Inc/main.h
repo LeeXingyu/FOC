@@ -71,16 +71,16 @@ extern volatile uint8_t g_comm_io2_irq_pending;
 extern volatile uint8_t g_comm_int_irq_pending;
 
 
-typedef enum {
-    SENSOR_MODE_A = 1, // AS5047P  Mode 1
-    SENSOR_MODE_K = 3  // KTH7824  Mode 3
-} SensorMode_t;
-#define KTH7824
-#ifdef KTH7824
-#define SPI_MODE_KTH7824  3  // Mode 3: CPOL=1, CPHA=1 (2 Edge)
-#else
-#define AS5047P
-#define SPI_MODE_AS5047P  1  // Mode 1: CPOL=0, CPHA=1 (2 Edge)
+#define BOARD_ENCODER_TYPE_KTH7824   0U
+#define BOARD_ENCODER_TYPE_AS5047P   1U
+#define BOARD_ENCODER_TYPE_MT6835    2U
+
+#ifndef MOTOR_ENCODER_TYPE
+#define MOTOR_ENCODER_TYPE           BOARD_ENCODER_TYPE_MT6835
+#endif
+
+#ifndef LOAD_ENCODER_TYPE
+#define LOAD_ENCODER_TYPE            MOTOR_ENCODER_TYPE
 #endif
 /* USER CODE END ET */
 

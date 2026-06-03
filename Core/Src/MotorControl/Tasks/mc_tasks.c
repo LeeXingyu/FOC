@@ -180,6 +180,7 @@ void Offset_Encoder_Handle()
 		PID_Reset(&g_axis.currCtrl.pidId, 0.0f);
 		PID_Reset(&g_axis.currCtrl.pidIq, 0.0f);
 		g_axis.posCtrl.uOffsetAngleRaw = Get_Angle_Raw();
+		g_axis.posCtrl.uOffsetAngleRawNative = Get_Angle_RawNative();
 		g_axis.posCtrl.uCalibCount = 0;
 		g_axis.posCtrl.bCalibFlag = true;
 		g_axis.state = AXIS_STATE_RUN;
@@ -235,5 +236,4 @@ inline uint16_t FOC_Controller(void)
 	SetPhaseDuty(g_axis.pPWMCHandle);
 	return;
 }
-
 
