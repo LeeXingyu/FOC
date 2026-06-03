@@ -21,6 +21,7 @@ HAL_StatusTypeDef Read_Fault(uint16_t *pData);
 /* 新增：刷新故障寄存器到全局 drvConfig */
 HAL_StatusTypeDef DRV8353_UpdateFaultStatus(void);
 HAL_StatusTypeDef DRV8353_ClearFault(void);
+HAL_StatusTypeDef DRV8353_SelfTest(uint16_t *pCtrlReg, uint16_t *pCsaReg);
 
 /* 原有接口 */
 HAL_StatusTypeDef Read_Register(uint8_t iRegAddr, uint16_t *pData);

@@ -27,6 +27,9 @@ void High_Frequency_Task(void)
 
     uint16_t uFOCreturn;
 
+	#ifdef ADC_INJ_TEST
+    ADC_Injected_TestHook();
+	#else
     // 已经初始化完毕
     if (g_axis.bMCBootCompleted)
     {
@@ -58,6 +61,7 @@ void High_Frequency_Task(void)
                 break;
         }
     }
+	#endif
 }
 
 /**
@@ -229,6 +233,7 @@ inline uint16_t FOC_Controller(void)
 
 	// 空间矢量调制
 	SetPhaseDuty(g_axis.pPWMCHandle);
+	return;
 }
 
 

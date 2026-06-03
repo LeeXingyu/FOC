@@ -28,6 +28,31 @@ static const float CURR_CONV_SCALE   = ADC_REFERENCE_VOLTAGE / (4096.0f * (float
 static const float INV_CURRENT_SCALE = 1.0f / (float)CURRENT_SCALE;
 static const float VBUS_CONV_SCALE   = (3.3f * (5.1f + 100.0f)) / (4096.0f * 5.1f * (float)VOLTAGE_SCALE);
 
+#ifdef ADC_INJ_TEST
+volatile AdcInjTest_t g_adc_inj_test = {0};
+void ADC_Injected_TestHook(void)
+{
+    SwitchOn_PWM(g_axis.pPWMCHandle);
+
+    g_axis.pPWMCHandle->bIsMeasuringOffset = true;
+    g_axis.pPWMCHandle->bIsShorting = false;
+
+    Write_TIM_Registers(g_axis.pPWMCHandle);
+
+
+    g_adc_inj_test.adc1_r1_ir   = LL_ADC_INJ_ReadConversionData12(ADC1, LL_ADC_INJ_RANK_1) >> 4;
+    g_adc_inj_test.adc1_r2_is   = LL_ADC_INJ_ReadConversionData12(ADC1, LL_ADC_INJ_RANK_2) >> 4;
+    g_adc_inj_test.adc1_r3_it   = LL_ADC_INJ_ReadConversionData12(ADC1, LL_ADC_INJ_RANK_3) >> 4;
+    g_adc_inj_test.adc1_r4_vbus = LL_ADC_INJ_ReadConversionData12(ADC1, LL_ADC_INJ_RANK_4) >> 4;
+
+    g_adc_inj_test.adc2_r1_vsenb = LL_ADC_INJ_ReadConversionData12(ADC2, LL_ADC_INJ_RANK_1) >> 4;
+    g_adc_inj_test.adc2_r2_vsenc = LL_ADC_INJ_ReadConversionData12(ADC2, LL_ADC_INJ_RANK_2) >> 4;
+    g_adc_inj_test.adc2_r3_vsena = LL_ADC_INJ_ReadConversionData12(ADC2, LL_ADC_INJ_RANK_3) >> 4;
+
+    g_adc_inj_test.sample_cnt++;
+}
+#endif
+
 /**
   * @brief  初始化TIMx、ADC以进行电流和电压读取
   * TIM1触发

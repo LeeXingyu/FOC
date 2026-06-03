@@ -164,7 +164,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 
     /* SPI1 DMA Init */
     /* SPI1_RX Init */
-    hdma_spi1_rx.Instance = DMA1_Channel5;
+    hdma_spi1_rx.Instance = DMA1_Channel1;
     hdma_spi1_rx.Init.Request = DMA_REQUEST_SPI1_RX;
     hdma_spi1_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
     hdma_spi1_rx.Init.PeriphInc = DMA_PINC_DISABLE;
@@ -227,7 +227,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 
     /* SPI2 DMA Init */
     /* SPI2_RX Init */
-    hdma_spi2_rx.Instance = DMA1_Channel2;
+    hdma_spi2_rx.Instance = DMA1_Channel7;
     hdma_spi2_rx.Init.Request = DMA_REQUEST_SPI2_RX;
     hdma_spi2_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
     hdma_spi2_rx.Init.PeriphInc = DMA_PINC_DISABLE;
@@ -290,7 +290,7 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* spiHandle)
 
     /* SPI3 DMA Init */
     /* SPI3_RX Init */
-    hdma_spi3_rx.Instance = DMA1_Channel1;
+    hdma_spi3_rx.Instance = DMA1_Channel5;
     hdma_spi3_rx.Init.Request = DMA_REQUEST_SPI3_RX;
     hdma_spi3_rx.Init.Direction = DMA_PERIPH_TO_MEMORY;
     hdma_spi3_rx.Init.PeriphInc = DMA_PINC_DISABLE;

@@ -81,7 +81,36 @@ typedef struct
   fixp30_t 			Udcbus_in_pu;                           /*!< @brief DC bus level expressed in per-unit */
   bool 				pwmControlEnable;                           /*!< @brief PWM control flag status */
 } CurrCtrlInput_t;
+#define ADC_INJ_TEST
+#ifdef ADC_INJ_TEST
+typedef struct
+{
+    uint16_t adc1_r1_ir;
+    uint16_t adc1_r2_is;
+    uint16_t adc1_r3_it;
+    uint16_t adc1_r4_vbus;
 
+    uint16_t adc2_r1_vsenb;
+    uint16_t adc2_r2_vsenc;
+    uint16_t adc2_r3_vsena;
+
+    Currents_Irst_t irst_meas;
+    fixp30_t bus_voltage_pu;
+
+    uint32_t sample_cnt;
+    uint32_t update_cnt;
+    uint32_t stale_cnt;
+
+    uint16_t last_adc1_r1_ir;
+    uint16_t last_adc1_r2_is;
+    uint16_t last_adc1_r3_it;
+    uint16_t last_adc1_r4_vbus;
+    uint16_t last_adc2_r1_vsenb;
+    uint16_t last_adc2_r2_vsenc;
+    uint16_t last_adc2_r3_vsena;
+} AdcInjTest_t;
+void ADC_Injected_TestHook(void);
+#endif
 /**
   * @brief  初始化TIMx、ADC以进行电流和电压读取
   */

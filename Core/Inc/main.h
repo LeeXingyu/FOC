@@ -39,38 +39,41 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
 extern Axis_t g_axis;
-// 定义存放ADC数据的结构体
-typedef struct {
-    uint8_t raw_COMM_ID;    // 对应 adc2 Rank 1 (Channel 17)
-    uint16_t raw_TSENA;     // 对应 adc2 Rank 2 (Channel 12)
-    uint16_t raw_TSENB;     // 对应 adc2 Rank 3 (Channel 5)
-    uint16_t raw_TSENC;     // 对应 adc2 Rank 4 (Channel 11)
 
-    // 如果需要，可以在这里加计算后的浮点值
-    // float temperature_c;
+typedef struct {
+    uint8_t raw_COMM_ID;    //  adc2 Rank 1 (Channel 17)
+    uint16_t raw_TSENA;     //  adc2 Rank 2 (Channel 12)
+    uint16_t raw_TSENB;     //  adc2 Rank 3 (Channel 5)
+    uint16_t raw_TSENC;     //  adc2 Rank 4 (Channel 11)
+
+ 
+    float temp_TSENA_c;
+    float temp_TSENB_c;
+    float temp_TSENC_c;
 } ADC_Rule_Data_t;
 
-// 实例化一个全局变量（或者在 main 中定义传递指针）
-extern ADC_Rule_Data_t g_adc_Rule_ID_Tem;
 
-// 1. 定义通信协议的枚举类型
+extern ADC_Rule_Data_t g_adc_Rule_ID_Tem;
+extern volatile uint8_t g_adc2_rule_dma_done;
+extern uint16_t g_adc2_rule_dma_buf[4];
+
+
 typedef enum {
-    COMM_PROTO_CAN = 0,       // 对应 ADC ID 0
-    COMM_PROTO_ETHERCAT = 1,  // 对应 ADC ID 1
-    COMM_PROTO_UNKNOWN = 2    // 容错处理
+    COMM_PROTO_ETHERCAT = 0,  //  ADC ID 0
+    COMM_PROTO_CAN = 1,       //  ADC ID 1
+    COMM_PROTO_UNKNOWN = 2    // 
 } Comm_Protocol_t;
 
-// 2. 定义一个全局变量来存储当前的通信状态
-// 加上 volatile 防止编译器过度优化，虽然这里主要是初始化赋值
+
 extern Comm_Protocol_t g_system_comm_mode;
 extern volatile uint8_t g_comm_io1_irq_pending;
 extern volatile uint8_t g_comm_io2_irq_pending;
 extern volatile uint8_t g_comm_int_irq_pending;
 
-// 定义 SPI 模式
+
 typedef enum {
-    SENSOR_MODE_A = 1, // AS5047P 使用 Mode 1
-    SENSOR_MODE_K = 3  // KTH7824 使用 Mode 3
+    SENSOR_MODE_A = 1, // AS5047P  Mode 1
+    SENSOR_MODE_K = 3  // KTH7824  Mode 3
 } SensorMode_t;
 #define KTH7824
 #ifdef KTH7824

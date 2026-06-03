@@ -39,7 +39,7 @@ static void CAN_Telemetry_SendFrame(uint16_t sid, const uint8_t *payload, uint8_
     }
 
     (void)memcpy(txbuf, payload, copy_len);
-    MCP2518FD_TransmitMessageQueue(DRV_CANFDSPI_INDEX_0, sid, txbuf, (CAN_DLC)copy_len);
+    MCP2518FD_TransmitMessageQueue(DRV_CANFDSPI_INDEX_0, sid, txbuf, DRV_CANFDSPI_DataBytesToDlc(copy_len));
 }
 
 static void CAN_Telemetry_PackU16(uint8_t *dst, uint16_t value)
@@ -120,13 +120,13 @@ void CAN_Telemetry_Service1ms(void)
 
         case 4U:
             CAN_Telemetry_PackFloat(&frame[0], FIXP30_toF(g_axis.busVoltage) * VOLTAGE_SCALE);
-            CAN_Telemetry_PackFloat(&frame[4], s_adc_shadow.raw_TSENB * 0.001f);
+            CAN_Telemetry_PackFloat(&frame[4], s_adc_shadow.temp_TSENB_c);
             CAN_Telemetry_SendFrame(0x205U, frame, 8U);
             break;
 
         case 5U:
-            CAN_Telemetry_PackFloat(&frame[0], s_adc_shadow.raw_TSENC * 0.001f);
-            CAN_Telemetry_PackFloat(&frame[4], 0.0f);
+            CAN_Telemetry_PackFloat(&frame[0], s_adc_shadow.temp_TSENC_c);
+            CAN_Telemetry_PackFloat(&frame[4], s_adc_shadow.temp_TSENA_c);
             CAN_Telemetry_SendFrame(0x206U, frame, 8U);
             break;
 

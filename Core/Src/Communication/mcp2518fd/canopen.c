@@ -151,14 +151,14 @@ void CANFD_INIT(void)
 	// Setup TX FIFO  发送FIFO配置
 	DRV_CANFDSPI_TransmitChannelConfigureObjectReset(&txConfig);
 	txConfig.FifoSize = 7;                                  // 采用FIFO2作为发送FIFO
-	txConfig.PayLoadSize = CAN_PLSIZE_8;     // 有效负载大小位8个数据字节
+	txConfig.PayLoadSize = CAN_PLSIZE_16;     // 有效负载大小位8个数据字节
 	txConfig.TxPriority = 0;                   // 使能奇偶校验位
 	//CiTXQCON->addr:0x50-53 + CAN_FIFO_CHn*12
 	DRV_CANFDSPI_TransmitChannelConfigure(DRV_CANFDSPI_INDEX_0, CAN_FIFO_CH2, &txConfig);
 	// Setup RX FIFO              接收FIFO配置
 	DRV_CANFDSPI_ReceiveChannelConfigureObjectReset(&rxConfig);
 	rxConfig.FifoSize = 15;                                  // 采用FIFO1作为接收FIFO
-	rxConfig.PayLoadSize = CAN_PLSIZE_8;     // 有效负载大小位8个数据字节
+	rxConfig.PayLoadSize = CAN_PLSIZE_16;     // 有效负载大小位8个数据字节
 	rxConfig.RxTimeStampEnable = 0;                 //不捕捉时间戳
 	//CiFIFOCON1->addr:0x50-53 + CAN_FIFO_CHn*12
 	DRV_CANFDSPI_ReceiveChannelConfigure(DRV_CANFDSPI_INDEX_0, CAN_FIFO_CH1, &rxConfig);
@@ -182,7 +182,7 @@ void CANFD_INIT(void)
 	DRV_CANFDSPI_FilterToFifoLink(DRV_CANFDSPI_INDEX_0, CAN_FILTER0, CAN_FIFO_CH1, true);
 	// Setup Bit Time 设置位时间  总线波特率 baud，这里采用自动测量发送器延时的方式实现二次采样点采集数据位
 	// CiNBTCFG->0x04-0x07
-	DRV_CANFDSPI_BitTimeConfigure(DRV_CANFDSPI_INDEX_0, CAN_500K_2M, CAN_SSP_MODE_AUTO, CAN_SYSCLK_40M);
+	DRV_CANFDSPI_BitTimeConfigure(DRV_CANFDSPI_INDEX_0, CAN_1000K_4M, CAN_SSP_MODE_AUTO, CAN_SYSCLK_40M);
 	// Setup Transmit and Receive Interrupts
 	// IOCONN->0xE04-0xE07
 	DRV_CANFDSPI_GpioModeConfigure(DRV_CANFDSPI_INDEX_0, GPIO_MODE_INT, GPIO_MODE_INT);
@@ -269,4 +269,3 @@ MCP2518FD_Status_t MCP2518FD_GetStatus(void)
 {
 	return s_mcp2518_status;
 }
-

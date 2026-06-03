@@ -59,6 +59,8 @@ Axis_t g_axis;
 uint8_t uart_data_ready = 0;
 ADC_Rule_Data_t g_adc_Rule_ID_Tem;
 Comm_Protocol_t g_system_comm_mode = COMM_PROTO_UNKNOWN;
+volatile uint8_t g_adc2_rule_dma_done = 0U;
+uint16_t g_adc2_rule_dma_buf[4] = {0U};
 //extern char g_uartRxBuffer[UART3_DMA_BUF_SIZE];
 /* USER CODE END PV */
 
@@ -71,7 +73,6 @@ void MX_FREERTOS_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
 /* USER CODE END 0 */
 
 /**
@@ -82,7 +83,9 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+	  uint16_t ctrl = 0;
+	  uint16_t csa = 0;
+	  uint8_t status = 0 ;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -112,26 +115,34 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM3_Init();
   MX_CORDIC_Init();
+  
   /* USER CODE BEGIN 2 */
-  // 电机初始化
-  CDC_Transmit_FS ((uint8_t *)"Hello\r",6);
+  HAL_Delay(30);
+  SPI2_SwitchDevice(SPI2_DEV_DRV8353);
+  MX_USB_Device_Init();
+  //HAL_Delay(1000);
+  //CDC_Transmit_FS ((uint8_t *)"Hello\r",6);
   Motor_Control_Init();
 
-  // 驱动板初始化
-  DRV8353RS_Init();
 
-  ADC_Rule_Collect(&hadc2,&g_adc_Rule_ID_Tem);
+  DRV8353RS_Init();
+  HAL_Delay(1000);
+  /*DRV8353_SelfTest  Test SPI COMMUNICAT*/
+  //status = DRV8353_SelfTest(&ctrl, &csa);
+  ADC_Rule_Collect(&hadc2, &g_adc_Rule_ID_Tem);
   DRV8353_CS_HIGH();
-  if(g_system_comm_mode == COMM_PROTO_CAN)
+  if (g_system_comm_mode == COMM_PROTO_CAN)
   {
     SPI2_SwitchDevice(SPI2_DEV_MCP2518FD);
-	  CANFD_INIT();
-	  CAN_Telemetry_Init();
+    HAL_Delay(1000);
+    CANFD_INIT();
+    CAN_Telemetry_Init();
   }
-  else if(g_system_comm_mode == COMM_PROTO_ETHERCAT)
+  else if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
   {
     SPI2_SwitchDevice(SPI2_DEV_LAN9253);
-	  LAN9253_Init();
+    HAL_Delay(1000);
+    LAN9253_Init();
   }
 
   /* USER CODE END 2 */
@@ -206,83 +217,87 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 void ADC_Rule_Collect(ADC_HandleTypeDef* hadc, ADC_Rule_Data_t* data)
 {
-	uint16_t raw_val = 0;
-    // 1. 启动 ADC 规则组转换
-    if (HAL_ADC_Start(hadc) != HAL_OK)
+  uint16_t raw_val = 0U;
+  uint32_t tick_start = 0U;
+
+  g_adc2_rule_dma_done = 0U;
+
+  if (HAL_ADC_Start_DMA(hadc, (uint32_t *)g_adc2_rule_dma_buf, 4U) != HAL_OK)
+  {
+    return;
+  }
+
+  tick_start = HAL_GetTick();
+  while (g_adc2_rule_dma_done == 0U)
+  {
+    if ((HAL_GetTick() - tick_start) > 100U)
     {
-        // 启动失败处理
-        return;
+      (void)HAL_ADC_Stop_DMA(hadc);
+      return;
     }
+  }
 
-    // 2. 依次获取 4 个通道的数据
-    // 注意：在单次扫描模式下，HAL 库会自动按 Rank 顺序排列
-    // 我们只需要按顺序调用 Get_Value 即可
+  (void)HAL_ADC_Stop_DMA(hadc);
 
-    // --- Rank 1: Channel 17 (COMMID) ---
-    if (HAL_ADC_PollForConversion(hadc, 10) == HAL_OK) // 等待转换完成，超时10ms
-    {
-    	raw_val = HAL_ADC_GetValue(hadc) >> 4;
-    	if(raw_val > 2000)
-    	{
-    		data->raw_COMM_ID = 1;
+  raw_val = g_adc2_rule_dma_buf[0] >> 4;
+  if (raw_val > 2000U)
+  {
+    data->raw_COMM_ID = 1U;
+    g_system_comm_mode = COMM_PROTO_CAN;
+  }
+  else
+  {
+    data->raw_COMM_ID = 0U;
+    g_system_comm_mode = COMM_PROTO_ETHERCAT;
+  }
 
-    	}
-    	else
-    	{
-    		data->raw_COMM_ID = 0;
-    	}
-    	g_system_comm_mode = data->raw_COMM_ID;
+  data->raw_TSENA = g_adc2_rule_dma_buf[1] >> 4;
+  data->raw_TSENB = g_adc2_rule_dma_buf[2] >> 4;
+  data->raw_TSENC = g_adc2_rule_dma_buf[3] >> 4;
+}
 
-    }
-    //需要根据热敏电阻系数进行计算得出实际温度
-    // --- Rank 2: Channel 12 ---
-    if (HAL_ADC_PollForConversion(hadc, 10) == HAL_OK)
-    {
-        data->raw_TSENA = HAL_ADC_GetValue(hadc);
-    }
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
+{
+  if (hadc->Instance == ADC2)
+  {
+    g_adc2_rule_dma_done = 1U;
+  }
+}
 
-    // --- Rank 3: Channel 5 ---
-    if (HAL_ADC_PollForConversion(hadc, 10) == HAL_OK)
-    {
-        data->raw_TSENB = HAL_ADC_GetValue(hadc);
-    }
-
-    // --- Rank 4: Channel 11 ---
-    if (HAL_ADC_PollForConversion(hadc, 10) == HAL_OK)
-    {
-        data->raw_TSENC = HAL_ADC_GetValue(hadc);
-    }
-
-    // 3. 停止 ADC (可选，但建议加上以省电和确保状态清晰)
-    HAL_ADC_Stop(hadc);
+void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
+{
+  if (hadc->Instance == ADC2)
+  {
+    g_adc2_rule_dma_done = 0U;
+  }
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-	if (GPIO_Pin == DRV_FAULT_N_Pin)
-	{
-		g_axis.error = (AxisError_t)(g_axis.error | AXIS_ERROR_GATE_DRIVER);
-		g_axis.state = AXIS_STATE_FAULT_NOW;
-		return;
-	}
+  if (GPIO_Pin == DRV_FAULT_N_Pin)
+  {
+    g_axis.error = (AxisError_t)(g_axis.error | AXIS_ERROR_GATE_DRIVER);
+    g_axis.state = AXIS_STATE_FAULT_NOW;
+    return;
+  }
 
-	if (GPIO_Pin == COMM_IO1_Pin)
-	{
-		g_comm_io1_irq_pending = 1U;
-		return;
-	}
+  if (GPIO_Pin == COMM_IO1_Pin)
+  {
+    g_comm_io1_irq_pending = 1U;
+    return;
+  }
 
-	if (GPIO_Pin == COMM_IO2_Pin)
-	{
-		g_comm_io2_irq_pending = 1U;
-		return;
-	}
+  if (GPIO_Pin == COMM_IO2_Pin)
+  {
+    g_comm_io2_irq_pending = 1U;
+    return;
+  }
 
-	if (GPIO_Pin == COMM_INT_Pin)
-	{
-		g_comm_int_irq_pending = 1U;
-		return;
-	}
+  if (GPIO_Pin == COMM_INT_Pin)
+  {
+    g_comm_int_irq_pending = 1U;
+    return;
+  }
 }
 /* USER CODE END 4 */
 

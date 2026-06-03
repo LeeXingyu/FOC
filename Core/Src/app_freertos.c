@@ -118,7 +118,7 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* creation of Comm_Task */
-  Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
+  //Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   temTaskHandle = osThreadNew(Tem_Task, NULL, &temTask_attributes);
@@ -140,17 +140,12 @@ void MX_FREERTOS_Init(void) {
 /* USER CODE END Header_StartDefaultTask */
 void StartDefaultTask(void *argument)
 {
-  /* init code for USB_Device */
-  MX_USB_Device_Init();
-  /* USER CODE BEGIN StartDefaultTask */
-  /* Infinite loop */
+  // MX_USB_Device_Init();
   for(;;)
   {
     osDelay(1);
   }
-  /* USER CODE END StartDefaultTask */
 }
-
 /* USER CODE BEGIN Header_Communication_Task */
 /**
 * @brief Function implementing the Comm_Task thread.

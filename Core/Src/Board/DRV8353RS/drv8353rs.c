@@ -9,7 +9,6 @@
 #include "drv8353rs.h"
 extern SPI_HandleTypeDef hspi2;
 
-/* 保持你的全局命名 */
 DRV8353RSConfig_t drvConfig;
 
 void DRV8353RS_Init(void)
@@ -35,7 +34,8 @@ void DRV8353RS_Init(void)
     drvConfig.drvCsaObj.csaObj.CSA_CAL_B  = 0b00;
     drvConfig.drvCsaObj.csaObj.CSA_CAL_A  = 0b00;
     drvConfig.drvCsaObj.csaObj.DIS_SEN    = 0b00;
-    drvConfig.drvCsaObj.csaObj.CSA_GAIN   = 0b11;
+    drvConfig.drvCsaObj.csaObj.CSA_GAIN   = 0b01; //10 GAIN  对应 AMPLIFICATION_GAIN
+    //drvConfig.drvCsaObj.csaObj.CSA_GAIN   = 0b11;
     drvConfig.drvCsaObj.csaObj.LS_REF     = 0b00;
     drvConfig.drvCsaObj.csaObj.VREF_DIV   = 0b01;
     drvConfig.drvCsaObj.csaObj.CSA_FET    = 0b00;
@@ -44,14 +44,14 @@ void DRV8353RS_Init(void)
     (void)Read_Register(0x06, &drvConfig.drvCsaObj.data);
 }
 
-/* 仅读 0x00：兼容你现有调用 */
+
 HAL_StatusTypeDef Read_Fault(uint16_t *pData)
 {
     if (pData == NULL) return HAL_ERROR;
     return Read_Register(0x00, pData);
 }
 
-/* 读取 0x00 和 0x01 并写入 drvConfig 的 fault 结构体 */
+
 HAL_StatusTypeDef DRV8353_UpdateFaultStatus(void)
 {
     HAL_StatusTypeDef st;
@@ -109,6 +109,80 @@ HAL_StatusTypeDef DRV8353_ClearFault(void)
     st = Write_Register(0x02, ctrl);
     if (st != HAL_OK) return st;
 
-    ctrl &= (uint16_t)(~0x0001U);   /* 可选：手动拉回 */
+    ctrl &= (uint16_t)(~0x0001U);  
     return Write_Register(0x02, ctrl);
+}
+
+HAL_StatusTypeDef DRV8353_SelfTest(uint16_t *pCtrlReg, uint16_t *pCsaReg)
+{
+    HAL_StatusTypeDef st;
+    uint16_t ctrl_before = 0U;
+    uint16_t csa_before = 0U;
+    uint16_t csa_test = 0U;
+    uint16_t csa_readback = 0U;
+    uint16_t csa_restore = 0U;
+
+    DRV8353_ENABLE();
+    HAL_Delay(2);
+
+    st = Read_Register(0x02, &ctrl_before);
+    if (st != HAL_OK)
+    {
+        return st;
+    }
+
+    st = Read_Register(0x06, &csa_before);
+    if (st != HAL_OK)
+    {
+        return st;
+    }
+
+    /* Toggle VREF_DIV and confirm the new value can be read back. */
+    csa_test = csa_before ^ 0x0200U;
+    st = Write_Register(0x06, csa_test);
+    if (st != HAL_OK)
+    {
+        return st;
+    }
+
+    st = Read_Register(0x06, &csa_readback);
+    if (st != HAL_OK)
+    {
+        (void)Write_Register(0x06, csa_before);
+        return st;
+    }
+
+    st = Write_Register(0x06, csa_before);
+    if (st != HAL_OK)
+    {
+        return st;
+    }
+
+    st = Read_Register(0x06, &csa_restore);
+    if (st != HAL_OK)
+    {
+        return st;
+    }
+
+    if (pCtrlReg != NULL)
+    {
+        *pCtrlReg = ctrl_before;
+    }
+
+    if (pCsaReg != NULL)
+    {
+        *pCsaReg = csa_readback;
+    }
+
+    if ((csa_readback & 0x07FFU) != (csa_test & 0x07FFU))
+    {
+        return HAL_ERROR;
+    }
+
+    if ((csa_restore & 0x07FFU) != (csa_before & 0x07FFU))
+    {
+        return HAL_ERROR;
+    }
+
+    return HAL_OK;
 }

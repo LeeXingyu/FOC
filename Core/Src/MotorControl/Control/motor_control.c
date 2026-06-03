@@ -120,6 +120,7 @@ void Motor_Control_Init(void)
   */
 uint16_t FOC_Control(void)
 {
+
 	// 获取三相电流
 	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
 
@@ -144,7 +145,7 @@ uint16_t FOC_Control(void)
 	currCtrlInput.Udcbus_in_pu = g_axis.busVoltage;
 
 	Curr_Control(&g_axis.currCtrl, &currCtrlInput);
-
+  
 	return 0;
 }
 
