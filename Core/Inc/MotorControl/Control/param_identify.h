@@ -110,6 +110,8 @@ typedef struct
      */
     ParamIdResult_t result;
     uint32_t pole_pairs;
+    uint8_t can_node_id;
+    uint8_t reserved0[3];
     float curr_kp_si;
     float curr_wi_si;
     /* Mechanical parameters identified from speed/torque data */
@@ -133,6 +135,9 @@ bool ParamId_LoadFromFlash(ParamIdFlashData_t *data);
 bool ParamId_ClearFlash(void);
 bool ParamId_ApplyFlashDataToAxis(const ParamIdFlashData_t *data);
 bool ParamId_RestoreFromFlashToAxis(void);
+uint8_t ParamId_GetCanNodeId(void);
+bool ParamId_SetCanNodeId(uint8_t nodeId);
+bool ParamId_SaveCanNodeIdToFlash(uint8_t nodeId);
 
 void ParamId_ModuleInit(void);
 ParamIdRet_t ParamId_ModuleStart(ParamIdStep_t step);

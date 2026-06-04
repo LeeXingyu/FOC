@@ -168,6 +168,7 @@ void Communication_Task(void *argument)
       {
         g_comm_int_irq_pending = 0U;
         MCP2518FD_ProcessRxIrq();
+        CAN_Telemetry_Service1ms();
       }
 
       if (g_comm_io1_irq_pending != 0U)

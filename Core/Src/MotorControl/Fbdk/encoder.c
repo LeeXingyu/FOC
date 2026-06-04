@@ -11,7 +11,11 @@ typedef struct
     GPIO_TypeDef *cs_port;
     uint16_t cs_pin;
     EncoderType_t type;
+    uint8_t enabled;
+    uint8_t fault_latched;
+    uint8_t timeout_count;
     volatile EncoderSpiState_t state;
+    uint32_t start_tick;
     volatile uint16_t raw_compat;
     volatile uint32_t raw_native;
     volatile float angle_deg;
@@ -81,6 +85,9 @@ static EncoderDev_t s_enc[ENC_ID_MAX] =
         }
     }
 };
+
+#define ENCODER_SPI_TIMEOUT_MS  5U
+#define ENCODER_MAX_TIMEOUT_COUNT  3U
 
 static uint32_t Encoder_CountFromType(EncoderType_t type)
 {
@@ -182,6 +189,73 @@ static void Encoder_UpdateCompatFeedback(EncoderDev_t *pdev)
     pdev->raw_compat = Encoder_NormalizeToCompat16(pdev->raw_native, Encoder_CountFromType(pdev->type));
 }
 
+static void Encoder_DisableDevice(EncoderDev_t *pdev)
+{
+    if (pdev == NULL)
+    {
+        return;
+    }
+
+    pdev->enabled = 0U;
+    pdev->fault_latched = 1U;
+    pdev->state = ENC_SPI_IDLE;
+    pdev->start_tick = 0U;
+}
+
+static void Encoder_ForceStop(EncoderDev_t *pdev)
+{
+    if ((pdev == NULL) || (pdev->hspi == NULL))
+    {
+        return;
+    }
+
+    (void)HAL_SPI_DMAStop(pdev->hspi);
+    HAL_GPIO_WritePin(pdev->cs_port, pdev->cs_pin, GPIO_PIN_SET);
+
+    switch (pdev->type)
+    {
+        case ENC_TYPE_AS5047P:
+            pdev->as5047p.busy = 0U;
+            break;
+
+        case ENC_TYPE_MT6835:
+            pdev->mt6835.busy = 0U;
+            break;
+
+        case ENC_TYPE_KTH7824:
+        default:
+            pdev->kth7824.busy = 0U;
+            break;
+    }
+
+    pdev->state = ENC_SPI_IDLE;
+    pdev->start_tick = 0U;
+}
+
+static void Encoder_CheckTimeout(EncoderDev_t *pdev)
+{
+    uint32_t now;
+
+    if ((pdev == NULL) || (pdev->state != ENC_SPI_BUSY))
+    {
+        return;
+    }
+
+    now = HAL_GetTick();
+    if ((now - pdev->start_tick) >= ENCODER_SPI_TIMEOUT_MS)
+    {
+        Encoder_ForceStop(pdev);
+        if (pdev->timeout_count < 0xFFU)
+        {
+            pdev->timeout_count++;
+        }
+        if (pdev->timeout_count >= ENCODER_MAX_TIMEOUT_COUNT)
+        {
+            Encoder_DisableDevice(pdev);
+        }
+    }
+}
+
 void Init_Encoder(void)
 {
     uint8_t i;
@@ -198,11 +272,18 @@ void Init_Encoder(void)
 
     for (i = 0U; i < ENC_ID_MAX; i++)
     {
+        s_enc[i].enabled = 1U;
+        s_enc[i].fault_latched = 0U;
+        s_enc[i].timeout_count = 0U;
         s_enc[i].state = ENC_SPI_IDLE;
+        s_enc[i].start_tick = 0U;
         s_enc[i].raw_compat = 0U;
         s_enc[i].raw_native = 0U;
         s_enc[i].angle_deg = 0.0f;
-        (void)Encoder_InitDevice(&s_enc[i]);
+        if (Encoder_InitDevice(&s_enc[i]) != HAL_OK)
+        {
+            Encoder_DisableDevice(&s_enc[i]);
+        }
     }
 }
 
@@ -215,16 +296,30 @@ HAL_StatusTypeDef Start_Encoder_Read(EncoderId_t id)
         return HAL_ERROR;
     }
 
+    if (s_enc[id].enabled == 0U)
+    {
+        return HAL_ERROR;
+    }
+
+    Encoder_CheckTimeout(&s_enc[id]);
+
+    if (s_enc[id].enabled == 0U)
+    {
+        return HAL_ERROR;
+    }
+
     if (s_enc[id].state != ENC_SPI_IDLE)
     {
         return HAL_BUSY;
     }
 
     s_enc[id].state = ENC_SPI_BUSY;
+    s_enc[id].start_tick = HAL_GetTick();
     ret = Encoder_StartRead(&s_enc[id]);
     if (ret != HAL_OK)
     {
         s_enc[id].state = ENC_SPI_IDLE;
+        s_enc[id].start_tick = 0U;
     }
 
     return ret;
@@ -295,6 +390,7 @@ void Encoder_SpiDmaCpltCallback(SPI_HandleTypeDef *hspi)
         {
             if (Encoder_CompleteRead(&s_enc[i], hspi) == HAL_OK)
             {
+                s_enc[i].timeout_count = 0U;
                 Encoder_UpdateCompatFeedback(&s_enc[i]);
 
                 if ((EncoderId_t)i == ENC_ID_MOTOR)
@@ -306,6 +402,7 @@ void Encoder_SpiDmaCpltCallback(SPI_HandleTypeDef *hspi)
             }
 
             s_enc[i].state = ENC_SPI_IDLE;
+            s_enc[i].start_tick = 0U;
             return;
         }
     }
@@ -314,4 +411,26 @@ void Encoder_SpiDmaCpltCallback(SPI_HandleTypeDef *hspi)
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     Encoder_SpiDmaCpltCallback(hspi);
+}
+
+void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
+{
+    uint8_t i;
+
+    for (i = 0U; i < ENC_ID_MAX; i++)
+    {
+        if (s_enc[i].hspi == hspi)
+        {
+            Encoder_ForceStop(&s_enc[i]);
+            if (s_enc[i].timeout_count < 0xFFU)
+            {
+                s_enc[i].timeout_count++;
+            }
+            if (s_enc[i].timeout_count >= ENCODER_MAX_TIMEOUT_COUNT)
+            {
+                Encoder_DisableDevice(&s_enc[i]);
+            }
+            return;
+        }
+    }
 }

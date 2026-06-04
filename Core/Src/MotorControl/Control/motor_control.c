@@ -85,7 +85,6 @@ void Motor_Control_Init(void)
 	Kalman_Filter_Init(&g_motorSpeedKalmanFilter, KF_R, KF_Q);
 	MC_Calib_Init();
 
-
 	/* 开环参数初始化 */
 	g_axis.posCtrl.hzToStepAngle_pu = FIXP30(FREQUENCY_SCALE / PWM_FREQUENCY);
 	g_axis.posCtrl.openLoopAngle_pu = FIXP30(0.0f);

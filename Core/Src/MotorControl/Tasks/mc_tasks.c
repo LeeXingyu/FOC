@@ -24,8 +24,8 @@ static void Param_Calib_Handle(void);
 void High_Frequency_Task(void)
 {
     // 异步读取两个编码器（SPI1 + SPI3）
-    (void)Start_Encoder_Read(ENC_ID_MOTOR);
-    (void)Start_Encoder_Read(ENC_ID_LOAD);
+    //(void)Start_Encoder_Read(ENC_ID_MOTOR);
+    //(void)Start_Encoder_Read(ENC_ID_LOAD);
 
     uint16_t uFOCreturn;
 

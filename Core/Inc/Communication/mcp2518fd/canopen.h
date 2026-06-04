@@ -22,6 +22,37 @@ extern "C" {
 #define DRV_CANFDSPI_INDEX_0         0
 #define DRV_CANFDSPI_INDEX_1         1
 
+// 11-bit standard ID layout:
+// [10:4] function code, [3:0] node ID.
+#define CAN_NODE_ID_BITS             4U
+#define CAN_NODE_ID_MASK             0x0FU
+#define CAN_FUNCTION_CODE_SHIFT       CAN_NODE_ID_BITS
+#define CAN_MAKE_ID(func, node)      (uint16_t)((((uint16_t)(func)) << CAN_FUNCTION_CODE_SHIFT) | ((uint16_t)(node) & CAN_NODE_ID_MASK))
+#define CAN_GET_FUNC(id)             (uint8_t)((uint16_t)(id) >> CAN_FUNCTION_CODE_SHIFT)
+#define CAN_GET_NODE(id)             (uint8_t)((uint16_t)(id) & CAN_NODE_ID_MASK)
+
+#ifndef APP_USE_CAN_FD
+#define APP_USE_CAN_FD               1
+#endif
+
+#if APP_USE_CAN_FD
+#define APP_CAN_TX_FIFO_PAYLOAD_SIZE CAN_PLSIZE_16
+#define APP_CAN_RX_FIFO_PAYLOAD_SIZE CAN_PLSIZE_16
+#define APP_CAN_FRAME_FDF            1U
+#define APP_CAN_FRAME_BRS            1U
+#define APP_CAN_MAX_DATA_BYTES       16U
+#define APP_CAN_RX_FETCH_BYTES       16U
+#define APP_CAN_BITTIME_SETUP        CAN_500K_2M
+#else
+#define APP_CAN_TX_FIFO_PAYLOAD_SIZE CAN_PLSIZE_16
+#define APP_CAN_RX_FIFO_PAYLOAD_SIZE CAN_PLSIZE_16
+#define APP_CAN_FRAME_FDF            0U
+#define APP_CAN_FRAME_BRS            0U
+#define APP_CAN_MAX_DATA_BYTES       8U
+#define APP_CAN_RX_FETCH_BYTES       8U
+#define APP_CAN_BITTIME_SETUP        CAN_500K_2M
+#endif
+
 //! SPI Initialization
     
 void CANFD_INIT(void);
@@ -38,6 +69,8 @@ typedef struct
     uint32_t rx_irq_count;
     uint32_t rx_frame_count;
     uint32_t tx_frame_count;
+    uint32_t tx_timeout_count;
+    uint32_t tx_drop_count;
     uint32_t rx_overflow_count;
     uint32_t rx_invalid_count;
     uint32_t rx_reject_count;

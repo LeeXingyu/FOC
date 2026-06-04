@@ -2,159 +2,239 @@
 
 ## 1. Overview
 
-This document describes the current CAN communication content and runtime flow in this project. It is based on the actual implementation in:
+This document describes the current CAN / CAN FD communication implementation in this project.
 
+Primary reference files:
+
+- `Core/Inc/Communication/mcp2518fd/canopen.h`
 - `Core/Src/Communication/mcp2518fd/canopen.c`
 - `Core/Src/Communication/mcp2518fd/can_telemetry.c`
 - `Core/Src/app_freertos.c`
 - `Core/Src/MotorControl/Control/param_identify.c`
-- `Core/Src/MotorControl/Tasks/mc_tasks.c`
-- `Core/Src/main.c`
 
-Current communication chip is `MCP2518FD`. The project currently uses it in a CAN protocol handling framework, with RX command parsing in `canopen.c` and all TX uplink frames funneled through `can_telemetry.c`.
+The project uses `MCP2518FD` as the external CAN controller.
 
-## 2. Overall Architecture
+Current protocol characteristics:
 
-Current communication flow is:
+- standard 11-bit arbitration ID
+- ID contains both function code and node ID
+- command function codes stay fixed
+- telemetry mapping is selected by compile-time macro
+- `APP_USE_CAN_FD = 0`: classical CAN telemetry layout
+- `APP_USE_CAN_FD = 1`: CAN FD telemetry layout
 
-1. `MCP2518FD` receives a CAN frame.
-2. `COMM_INT` pin generates an external interrupt.
-3. `HAL_GPIO_EXTI_Callback()` only sets `g_comm_int_irq_pending = 1`.
-4. `Communication_Task()` polls that pending flag every 1 ms.
-5. When the flag is set, the thread calls `MCP2518FD_ProcessRxIrq()`.
-6. `MCP2518FD_ProcessRxIrq()` reads RX FIFO by SPI and dispatches the command.
-7. Command execution result is packed as a status response and queued for transmission.
-8. `CAN_Telemetry_Service1ms()` sends queued response frames first, then sends periodic telemetry frames when the queue is empty.
+## 2. CAN ID Format
 
-Core characteristic:
+### 2.1 Arbitration ID layout
 
-- Interrupt is only used for notification.
-- Actual MCP2518FD register/FIFO access is done in the communication thread.
-- Outgoing frames are centralized to one service path, which avoids scattered direct TX behavior.
+Current macro definitions:
 
-## 3. Thread and Interrupt Flow
+```c
+#define CAN_NODE_ID_BITS             4U
+#define CAN_NODE_ID_MASK             0x0FU
+#define CAN_FUNCTION_CODE_SHIFT      CAN_NODE_ID_BITS
+#define CAN_MAKE_ID(func, node)      ((((uint16_t)(func)) << 4) | ((uint16_t)(node) & 0x0F))
+```
 
-### 3.1 Communication thread
+Meaning:
 
-`Communication_Task()` runs with `osDelay(1)`, so the service cadence is approximately 1 ms.
+- `SID[10:4]`: function code
+- `SID[3:0]`: node ID
 
-When `g_system_comm_mode == COMM_PROTO_CAN`, the thread executes:
+Equivalent formula:
+
+```c
+SID = (func << 4) | node
+```
+
+### 2.2 Node ID range
+
+Current node ID range:
+
+- `0 ~ 15`
+
+Default node ID:
+
+- `1`
+
+The runtime node ID is maintained by:
+
+- `ParamId_GetCanNodeId()`
+- `ParamId_SaveCanNodeIdToFlash()`
+
+The node ID is stored to flash together with motor-related parameters.
+
+## 3. CAN / CAN FD Compile-Time Switch
+
+The protocol behavior is selected by:
+
+```c
+#ifndef APP_USE_CAN_FD
+#define APP_USE_CAN_FD 1
+#endif
+```
+
+Current macro behavior in `canopen.h`:
+
+### 3.1 When `APP_USE_CAN_FD = 1`
+
+- `APP_CAN_FRAME_FDF = 1`
+- `APP_CAN_FRAME_BRS = 1`
+- `APP_CAN_MAX_DATA_BYTES = 16`
+- `APP_CAN_RX_FETCH_BYTES = 16`
+- `APP_CAN_BITTIME_SETUP = CAN_500K_2M`
+
+Meaning:
+
+- arbitration bit rate: `500 kbps`
+- data bit rate: `2 Mbps`
+
+### 3.2 When `APP_USE_CAN_FD = 0`
+
+- `APP_CAN_FRAME_FDF = 0`
+- `APP_CAN_FRAME_BRS = 0`
+- `APP_CAN_MAX_DATA_BYTES = 8`
+- `APP_CAN_RX_FETCH_BYTES = 8`
+- `APP_CAN_BITTIME_SETUP = CAN_500K_2M`
+
+Meaning:
+
+- only classical CAN frame format is used
+- nominal bit timing remains `500 kbps`
+
+## 4. Communication Thread Flow
+
+The communication thread is `Communication_Task()` in `app_freertos.c`.
+
+When `g_system_comm_mode == COMM_PROTO_CAN`, the loop executes:
 
 1. `CAN_Telemetry_Service1ms()`
 2. `MCP2518FD_Service1ms()`
-3. Check `g_comm_int_irq_pending`
-4. If pending, clear the flag and call `MCP2518FD_ProcessRxIrq()`
+3. if `g_comm_int_irq_pending != 0`, clear the flag and call `MCP2518FD_ProcessRxIrq()`
+4. call `CAN_Telemetry_Service1ms()` once more after RX handling
 
-This means the communication thread is responsible for:
+Important behavior:
 
-- periodic telemetry scheduling
-- queued response transmission
-- parameter state change reporting
-- actual RX IRQ servicing
+- interrupt only notifies
+- actual SPI access is done in thread context
+- TX queue has higher priority than periodic telemetry
+- RX-handled command status can be sent in the same thread iteration after being queued
 
-### 3.2 External interrupt path
+## 5. MCP2518FD Initialization
 
-`COMM_INT_Pin` is configured as falling-edge EXTI input in `gpio.c`.
+`CANFD_INIT()` currently performs:
 
-After MCP2518FD RX FIFO has data:
-
-1. MCP2518FD asserts INT
-2. MCU EXTI enters `HAL_GPIO_EXTI_Callback()`
-3. callback sets `g_comm_int_irq_pending = 1U`
-4. `Communication_Task()` later handles the actual SPI read
-
-This design reduces work inside ISR and keeps SPI transaction out of interrupt context.
-
-## 4. MCP2518FD Initialization Behavior
-
-`CANFD_INIT()` performs the following main configuration:
-
-- chip reset
+- device reset
 - ECC enable
-- RAM init
-- module configure
-- TX FIFO configure
-- RX FIFO configure
-- filter/mask configure
-- bit timing configure
-- interrupt GPIO mode configure
+- RAM initialization
+- module configuration
+- TX FIFO configuration
+- RX FIFO configuration
+- node filter configuration
+- broadcast `GET_ID` filter configuration
+- bit timing configuration
+- interrupt GPIO configuration
 - RX event enable
-- normal mode select
+- switch to normal mode
 
-Current key settings:
+Key settings:
 
 - TX FIFO: `CAN_FIFO_CH2`
 - RX FIFO: `CAN_FIFO_CH1`
-- RX event: `CAN_RX_FIFO_NOT_EMPTY_EVENT`
-- module RX interrupt enabled
-- bit timing configured by:
-  - `DRV_CANFDSPI_BitTimeConfigure(..., CAN_1000K_4M, CAN_SSP_MODE_AUTO, CAN_SYSCLK_40M)`
+- TX payload size: `APP_CAN_TX_FIFO_PAYLOAD_SIZE`
+- RX payload size: `APP_CAN_RX_FIFO_PAYLOAD_SIZE`
+- bit timing: `APP_CAN_BITTIME_SETUP`
 
-Current transmit frame object in `MCP2518FD_TransmitMessageQueue()` is configured as:
+## 6. Receive Filter Strategy
 
-- `IDE = 0`
-- `RTR = 0`
-- `BRS = 0`
-- `FDF = 0`
+Two hardware receive filters are used.
 
-So the current project transmit path is still sending standard CAN-format frames on the software side. Even though the chip is `MCP2518FD`, whether the bus behaves as classical CAN or CAN FD depends on these frame control bits and the matching upper-computer bitrate settings.
+### 6.1 Filter0: local node command filter
 
-## 5. Receive Command Protocol
+Purpose:
 
-## 5.1 Command IDs
+- accept frames targeted to the current local node
 
-Current RX commands are:
+Matching rule:
 
-| SID | Function | Payload length |
-| --- | --- | --- |
-| `0x101` | start motor | `0` |
-| `0x102` | stop motor | `0` |
-| `0x103` | set speed Kp | `4` |
-| `0x104` | set speed Ki | `4` |
-| `0x105` | set speed reference | `4` |
-| `0x106` | switch to speed mode | `0` |
-| `0x107` | switch to position mode | `0` |
-| `0x108` | switch to open-loop / VF mode | `0` |
-| `0x109` | set pole pairs | `1` |
-| `0x10A` | start calibration | `1` |
-| `0x10B` | stop calibration | `0` |
-| `0x10C` | clear flash calibration data | `0` |
-| `0x10D` | read motor params from flash | `0` |
+- compare `SID[3:0]`
+- lower 4 bits must equal current node ID
 
-## 5.2 Payload format
+### 6.2 Filter1: broadcast `GET_ID`
 
-For `0x103`, `0x104`, `0x105`:
+Purpose:
 
-- payload is 4-byte `float`
-- byte order is little-endian
+- support single-device commissioning when the host does not know the node ID
 
-For `0x109`:
+Matching frame:
 
-- payload is 1 byte pole-pair count
-- value `0` is invalid
+- `CAN_MAKE_ID(CAN_FC_GET_ID, 0)`
+- example: `0x0E0`
 
-For `0x10A`:
+This is intended for single-device use only.
 
-- payload is 1 byte calibration mode
+## 7. Command Protocol
 
-Current supported values:
+Receive-side dispatch uses:
 
-- `0`: start full calibration chain from `IDLE`
-- `5`: start full parameter calibration in run context
+```c
+func = CAN_GET_FUNC(sid)
+node = CAN_GET_NODE(sid)
+```
 
-Other values are rejected as invalid argument.
+Command matching is based on function code.
 
-## 5.3 Command validation
+### 7.1 Command function codes
 
-Command dispatch checks:
+| Function code | Example SID for node `1` | Command | Payload length |
+| --- | --- | --- | --- |
+| `0x01` | `0x011` | stop motor | `0` |
+| `0x02` | `0x021` | start motor | `0` |
+| `0x03` | `0x031` | switch to speed mode | `0` |
+| `0x04` | `0x041` | switch to position mode | `0` |
+| `0x05` | `0x051` | switch to open loop / VF mode | `0` |
+| `0x06` | `0x061` | set speed reference | `4` |
+| `0x07` | `0x071` | set speed Kp | `4` |
+| `0x08` | `0x081` | set speed Ki | `4` |
+| `0x09` | `0x091` | set pole pairs | `1` |
+| `0x0A` | `0x0A1` | start calibration | `1` |
+| `0x0B` | `0x0B1` | stop calibration | `0` |
+| `0x0C` | `0x0C1` | read flash params | `0` |
+| `0x0D` | `0x0D1` | clear flash | `0` |
+| `0x0E` | `0x0E1` | get node ID | `0` |
+| `0x0F` | `0x0F1` | set node ID | `1` |
 
-- SID match
-- expected payload length
-- state legality
-- argument range
-- calibration busy state
+### 7.2 Command payload rules
 
-Current status values returned by command response:
+`SET_REF_SPEED`, `SET_SPEED_KP`, `SET_SPEED_KI`
+
+- 4-byte little-endian IEEE754 `float`
+
+`SET_POLE_PAIRS`
+
+- 1 byte
+- `0` is invalid
+
+`CALIB_START`
+
+- 1 byte mode
+
+Supported values:
+
+- `0`: full chain
+- `5`: parameter identification full flow
+
+`SET_ID`
+
+- 1 byte new node ID
+- valid range: `0 ~ 15`
+
+`GET_ID`
+
+- no payload
+- broadcast `E0` is accepted by dedicated hardware filter
+
+### 7.3 Command status return values
 
 | Value | Meaning |
 | --- | --- |
@@ -165,45 +245,78 @@ Current status values returned by command response:
 | `4` | `BUSY` |
 | `5` | `UNKNOWN` |
 
-## 6. Response and Uplink Frames
+## 8. Response Frames
 
-All command responses and parameter snapshots are queued first, then sent by `CAN_Telemetry_Service1ms()`.
+Response function codes are always preserved, independent of `CAN` or `CANFD`.
 
-## 6.1 Response frame IDs
+| Function code | Example SID for node `1` | Meaning |
+| --- | --- | --- |
+| `0x20` | `0x201` | command status response |
+| `0x21` | `0x211` | parameter state |
+| `0x22` | `0x221` | parameter result block 1 |
+| `0x23` | `0x231` | parameter result block 2, classical CAN only |
 
-| SID | Function |
-| --- | --- |
-| `0x181` | command execution status |
-| `0x182` | parameter state and validity |
-| `0x183` | parameter result block 1: `Rs`, `Ld` |
-| `0x184` | parameter result block 2: `Lq`, `Ke` |
+### 8.1 Command status response `0x20x`
 
-### 0x181 command status frame
-
-Payload layout:
+Current payload definition:
 
 | Byte | Meaning |
 | --- | --- |
-| 0..1 | original RX command SID, little-endian |
-| 2 | command status |
-| 3 | current `g_axis.state` |
-| 4 | extra field, currently usually `0` |
-| 5 | current parameter-calibration state |
-| 6 | received payload length |
-| 7 | current pole-pair count |
+| `0..1` | original command SID, little-endian |
+| `2` | command status |
+| `3` | current `g_axis.state` |
+| `4` | extra field |
+| `5` | parameter identification state |
+| `6` | received payload length |
+| `7` | current pole-pair count |
 
-### 0x182 parameter state frame
-
-Payload layout:
+When `APP_USE_CAN_FD = 1`, extra bytes are appended:
 
 | Byte | Meaning |
 | --- | --- |
-| 0 | current `g_axis.state` |
-| 1 | parameter state |
-| 2 | pole pairs |
-| 3 | validity bits |
-| 4..5 | pole pairs packed as `uint16_t` |
-| 6..7 | reserved |
+| `8` | current node ID |
+| `9` | `raw_COMM_ID` |
+| `10..11` | `raw_TSENA` |
+
+So:
+
+- classical CAN: `8 B`
+- CAN FD: `12 B`
+
+For `GET_ID` / `SET_ID`:
+
+- `extra` returns the node ID value
+
+Broadcast `E0` rule:
+
+- request SID: `0x0E0`
+- response SID uses real local node ID, for example `0x205`
+
+### 8.2 Parameter state response `0x21x`
+
+Payload:
+
+| Byte | Meaning |
+| --- | --- |
+| `0` | current axis state |
+| `1` | parameter state |
+| `2` | pole pairs |
+| `3` | validity bits |
+| `4..5` | pole pairs as `uint16_t` |
+
+When `APP_USE_CAN_FD = 1`, extra bytes are appended:
+
+| Byte | Meaning |
+| --- | --- |
+| `6` | node ID |
+| `7` | node mask (`0x0F`) |
+| `8` | FDF flag |
+| `9` | BRS flag |
+
+So:
+
+- classical CAN: `8 B`
+- CAN FD: `12 B`
 
 Validity bits:
 
@@ -212,202 +325,280 @@ Validity bits:
 - bit2: `Lq` valid
 - bit3: `Ke` valid
 
-### 0x183 / 0x184 parameter result frames
+### 8.3 Parameter result response
 
-Frame data is packed as little-endian IEEE754 `float`:
+Classical CAN:
 
-- `0x183`: `Rs`, `Ld`
-- `0x184`: `Lq`, `Ke`
+- `0x22x`: `Rs`, `Ld`
+- `0x23x`: `Lq`, `Ke`
 
-## 6.2 Periodic telemetry frame IDs
+CAN FD:
 
-Current periodic telemetry frame IDs are:
+- `0x22x`: `Rs`, `Ld`, `Lq`, `Ke` in one `16 B` frame
+- `0x23x` is not used for periodic parameter result output in CAN FD mode
 
-| SID | Content |
+## 9. Periodic Telemetry Mapping
+
+The telemetry mapping is different for `CANFD` and classical `CAN`.
+
+### 9.1 CAN FD telemetry mapping
+
+When `APP_USE_CAN_FD = 1`:
+
+| Function code | Example SID for node `4` | Payload length | Meaning |
+| --- | --- | --- | --- |
+| `0x30` | `0x304` | `16 B` | FOC full data |
+| `0x31` | `0x314` | `8 B` | status |
+| `0x32` | `0x324` | `16 B` | speed + bus voltage + temperature |
+| `0x33` | `0x334` | `12 B` | temperature group |
+
+#### `0x30x` FOC frame
+
+Payload:
+
+| Byte | Meaning |
 | --- | --- |
-| `0x201` | axis state, error, ctrl mode, comm id, raw TSENA |
-| `0x202` | current reference `Id`, `Iq` |
-| `0x203` | measured current `Id`, `Iq` |
-| `0x204` | speed reference, measured speed |
-| `0x205` | bus voltage, TSENB temperature |
-| `0x206` | TSENC temperature, TSENA temperature |
+| `0..3` | `refId` |
+| `4..7` | `refIq` |
+| `8..11` | `calcId` |
+| `12..15` | `calcIq` |
 
-### Periodic frame content details
+#### `0x31x` status frame
 
-`0x201`
+Payload:
 
-- byte0: `g_axis.state`
-- byte1: `g_axis.error`
-- byte2: `g_axis.enCtrlMode`
-- byte3: `raw_COMM_ID`
-- byte4..5: `raw_TSENA`
+| Byte | Meaning |
+| --- | --- |
+| `0` | `g_axis.state` |
+| `1` | `g_axis.error` |
+| `2` | `g_axis.enCtrlMode` |
+| `3` | `raw_COMM_ID` |
+| `4..5` | `raw_TSENA` |
+| `6` | node ID |
+| `7` | pole pairs |
 
-`0x202`
+#### `0x32x` speed / power frame
 
-- float `refId`
-- float `refIq`
+Payload:
 
-`0x203`
+| Byte | Meaning |
+| --- | --- |
+| `0..3` | `speedRef` |
+| `4..7` | `speedMeas` |
+| `8..11` | `busVoltage` |
+| `12..15` | `temp_TSENB_c` |
 
-- float `calcId`
-- float `calcIq`
+#### `0x33x` temperature frame
 
-`0x204`
+Payload:
 
-- float `speedRef`
-- float `speedMeas`
+| Byte | Meaning |
+| --- | --- |
+| `0..3` | `temp_TSENC_c` |
+| `4..7` | `temp_TSENA_c` |
+| `8..11` | `temp_TSENB_c` |
 
-`0x205`
+### 9.2 Classical CAN telemetry mapping
 
-- float `busVoltage`
-- float `temp_TSENB_c`
+When `APP_USE_CAN_FD = 0`:
 
-`0x206`
+| Function code | Example SID for node `4` | Payload length | Meaning |
+| --- | --- | --- | --- |
+| `0x30` | `0x304` | `6 B` | status |
+| `0x31` | `0x314` | `8 B` | current reference |
+| `0x32` | `0x324` | `8 B` | current calculation |
+| `0x33` | `0x334` | `8 B` | speed |
+| `0x34` | `0x344` | `8 B` | bus voltage + TSENB |
+| `0x35` | `0x354` | `8 B` | TSENC + TSENA |
 
-- float `temp_TSENC_c`
-- float `temp_TSENA_c`
+#### `0x30x` status frame
 
-## 7. Telemetry Transmission Timing
+Payload:
 
-Current telemetry scheduler is in `CAN_Telemetry_Service1ms()`.
+| Byte | Meaning |
+| --- | --- |
+| `0` | `g_axis.state` |
+| `1` | `g_axis.error` |
+| `2` | `g_axis.enCtrlMode` |
+| `3` | `raw_COMM_ID` |
+| `4..5` | `raw_TSENA` |
+
+#### `0x31x` current reference frame
+
+- `refId`
+- `refIq`
+
+#### `0x32x` current calculation frame
+
+- `calcId`
+- `calcIq`
+
+#### `0x33x` speed frame
+
+- `speedRef`
+- `speedMeas`
+
+#### `0x34x` bus / temperature B frame
+
+- `busVoltage`
+- `temp_TSENB_c`
+
+#### `0x35x` temperature frame
+
+- `temp_TSENC_c`
+- `temp_TSENA_c`
+
+## 10. Periodic Scheduler
+
+`CAN_Telemetry_Service1ms()` behavior:
+
+1. if TX queue is not empty, send one queued response frame and return
+2. if TX queue is empty, update periodic elapsed counters
+3. scan telemetry slots in configured order
+4. if a slot is due, build one frame, send it, clear its elapsed counter, and return
+
+Important point:
+
+- in one `1 ms` service call, at most one frame is sent
+
+### 10.1 Period configuration
+
+Current period constants:
+
+- current reference: `20 ms`
+- current calculation: `20 ms`
+- speed: `20 ms`
+- status: `100 ms`
+- bus / temperature group: `200 ms`
+- temperature slow group: `1000 ms`
+
+### 10.2 Actual slot usage
+
+CAN FD mode uses:
+
+- `0x30x` every `20 ms`
+- `0x32x` every `20 ms`
+- `0x31x` every `100 ms`
+- `0x33x` every `200 ms`
+
+Classical CAN mode uses:
+
+- `0x31x` every `20 ms`
+- `0x32x` every `20 ms`
+- `0x33x` every `20 ms`
+- `0x30x` every `100 ms`
+- `0x34x` every `200 ms`
+- `0x35x` every `1000 ms`
+
+## 11. ID Read / Write Behavior
+
+### 11.1 `GET_ID`
+
+Function code:
+
+- `0x0E`
+
+Targeted query:
+
+- send to `0x0Ex`
+
+Broadcast query:
+
+- send to `0x0E0`
+
+Reply:
+
+- response uses `0x20x`
+- response `extra` returns current node ID
+
+### 11.2 `SET_ID`
+
+Function code:
+
+- `0x0F`
+
+Payload:
+
+- `1 B` new node ID
 
 Behavior:
 
-1. If TX queue is not empty, send one queued frame immediately and return.
-2. If TX queue is empty, execute periodic scheduler.
-3. Periodic scheduler sends one telemetry frame every `100 ms`.
+1. validate node ID range
+2. save to flash
+3. reconfigure hardware RX filter to new node ID
+4. queue command status response
 
-Current constant:
+## 12. Flash and Calibration
 
-- `CAN_TELEMETRY_PERIOD_MS = 100`
-
-Important implication:
-
-- one telemetry frame is sent every 100 ms
-- there are 6 periodic frames total
-- a full telemetry round therefore takes about `600 ms`
-
-So the per-frame rate and full-cycle rate are different:
-
-- single frame update interval: `100 ms`
-- full 6-frame refresh cycle: `600 ms`
-
-Because queued frames have higher priority, command responses and parameter snapshots can temporarily delay periodic telemetry.
-
-## 8. Calibration and Flash Flow
-
-## 8.1 State chain
-
-Current motor state path is:
-
-`IDLE -> OFFSET_CALIB -> ENCODER_CALIB -> PARAM_CALIB -> RUN`
-
-`High_Frequency_Task()` handles state execution according to `g_axis.state`.
-
-## 8.2 Calibration trigger
-
-Calibration is triggered by CAN command `0x10A`.
-
-Supported behaviors:
-
-- `data[0] = 0`: start full chain from idle
-- `data[0] = 5`: start full parameter calibration
-
-`0x10B` is used to stop parameter calibration.
-
-## 8.3 Flash save and restore
-
-Current flash-related functions are:
+Current flash-related functions:
 
 - `ParamId_SaveToFlash()`
 - `ParamId_LoadFromFlash()`
 - `ParamId_ClearFlash()`
 - `ParamId_RestoreFromFlashToAxis()`
 
-Current design is:
+Flash content includes:
 
-1. calibration finishes
-2. result is marked pending for flash save
-3. `ParamId_ModuleBackgroundService()` performs actual flash write later
-4. background service is called from `Medium_Frequency_Task()`
+- identified motor parameters
+- pole pairs
+- current control related parameters
+- CAN node ID
 
-So flash write is deferred, not done directly inside the high-frequency path.
+Calibration-related commands:
 
-Boot restore logic:
+- `0x0A`: start calibration
+- `0x0B`: stop calibration
+- `0x0C`: read flash parameters
+- `0x0D`: clear flash
 
-1. project initializes default compile-time parameters first
-2. then tries `ParamId_RestoreFromFlashToAxis()`
-3. if flash data is valid, restore identified values into `Axis_t`
-4. if flash data is invalid or absent, keep compile-time defaults
+## 13. Practical Summary
 
-This avoids repeated flash reads in later control calls because runtime values are synchronized into `g_axis` at boot.
+Current design summary:
 
-## 9. Notes About Current CAN Sending Strategy
+- node ID uses lower 4 bits of standard 11-bit ID
+- command function codes are fixed and shared by CAN / CAN FD
+- response function codes `0x20 ~ 0x23` are fixed
+- telemetry function codes differ by compile-time mode
+- CAN FD tries to pack same-type runtime data into fewer larger frames
+- classical CAN keeps split runtime telemetry frames
+- TX queue is always sent before periodic telemetry
+- broadcast `E0` is reserved for single-device ID discovery
+- current CAN FD timing is `500 kbps` arbitration + `2 Mbps` data
 
-Current project strategy is:
+## 14. Current Host Parsing Recommendation
 
-- RX parse in `canopen.c`
-- TX unify in `can_telemetry.c`
+### 14.1 When `APP_USE_CAN_FD = 1`
 
-This has several practical advantages:
+Monitor:
 
-- all outbound traffic has one scheduling出口
-- command response and periodic telemetry no longer compete via scattered direct TX calls
-- easier to control upload rate
-- easier to insert new response frames later
+- `0x20x`: command response
+- `0x21x`: parameter state
+- `0x22x`: parameter result
+- `0x30x`: FOC
+- `0x31x`: status
+- `0x32x`: speed / power
+- `0x33x`: temperature
 
-Current TX queue depth:
+### 14.2 When `APP_USE_CAN_FD = 0`
 
-- `CAN_TX_QUEUE_DEPTH = 16`
+Monitor:
 
-If many responses are generated in a short time, periodic telemetry may be postponed until the queue drains.
+- `0x20x`
+- `0x21x`
+- `0x22x`
+- `0x23x`
+- `0x30x`
+- `0x31x`
+- `0x32x`
+- `0x33x`
+- `0x34x`
+- `0x35x`
 
-## 10. Debug Suggestions
+This document should be updated whenever one of the following changes:
 
-When checking CAN behavior, debug in this order:
-
-1. confirm `g_system_comm_mode == COMM_PROTO_CAN`
-2. confirm `Communication_Task()` is running every 1 ms
-3. confirm `COMM_INT` pin really toggles on RX
-4. confirm `g_comm_int_irq_pending` is being set in `HAL_GPIO_EXTI_Callback()`
-5. confirm `MCP2518FD_ProcessRxIrq()` is entered
-6. confirm RX SID and DLC are accepted by `Can_DispatchBySid()`
-7. confirm response frames are enqueued
-8. confirm `CAN_Telemetry_Service1ms()` is draining the queue
-
-If upper computer sees periodic data but command does not work, priority checks are:
-
-- wrong SID
-- wrong DLC
-- invalid float payload endian/order
-- axis state not matching command requirement
-- calibration already busy
-
-If command is accepted but no parameter data returns, priority checks are:
-
-- flash has not been written yet
-- flash content is invalid by magic/version/CRC
-- queue is full and response frame was not enqueued
-
-## 11. Practical Summary
-
-Current project CAN behavior can be summarized as:
-
-- reception is interrupt-notified, thread-processed
-- transmission is telemetry-service centralized
-- command frames use `0x101` to `0x10D`
-- command response uses `0x181`
-- parameter snapshot uses `0x182` to `0x184`
-- periodic runtime telemetry uses `0x201` to `0x206`
-- periodic telemetry cadence is one frame per `100 ms`
-- full telemetry cycle is about `600 ms`
-- calibration result is stored to flash by deferred background service
-- boot restores valid flash parameters back into `Axis_t`
-
-This document should be updated together with:
-
-- CAN SID changes
-- telemetry payload changes
-- calibration state-machine changes
-- flash struct version changes
-- MCP2518FD bit timing or frame mode changes
+- function code allocation
+- telemetry payload layout
+- CAN / CAN FD mode mapping
+- command payload definitions
+- flash structure version
+- bit timing configuration

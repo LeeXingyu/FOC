@@ -122,7 +122,7 @@ int main(void)
   MX_USB_Device_Init();
   //HAL_Delay(1000);
   //CDC_Transmit_FS ((uint8_t *)"Hello\r",6);
-  Motor_Control_Init();
+
   DRV8353RS_Init();
   HAL_Delay(1000);
   /*DRV8353_SelfTest  Test SPI COMMUNICAT*/
@@ -142,7 +142,7 @@ int main(void)
     HAL_Delay(1000);
     LAN9253_Init();
   }
-
+  Motor_Control_Init();
   /* USER CODE END 2 */
 
   /* Init scheduler */

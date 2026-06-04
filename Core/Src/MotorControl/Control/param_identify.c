@@ -14,6 +14,7 @@
 static ParamIdHandle_t s_param_id_module;
 static bool s_param_id_flash_save_pending = false;
 static ParamIdFlashData_t s_param_id_flash_pending_data;
+static uint8_t s_can_node_id = 1U;
 
 /* ---------- Local helpers ---------- */
 static float ParamId_AbsF(float x)
@@ -108,7 +109,7 @@ static ParamIdStep_t ParamId_NextStep(ParamIdStep_t step)
 
 /* ---------- Flash persistence ---------- */
 #define PARAM_ID_FLASH_MAGIC        (0x50494431UL) /* "PID1" */
-#define PARAM_ID_FLASH_VERSION      (0x00010001UL)
+#define PARAM_ID_FLASH_VERSION      (0x00010002UL)
 /* User may move this address to a dedicated page in linker script. */
 #define PARAM_ID_FLASH_ADDR         (0x0803F800UL)
 #define PARAM_ID_FLASH_PAGE_SIZE    (2048UL)
@@ -147,6 +148,11 @@ static uint32_t ParamId_Crc32(const uint8_t *data, uint32_t len)
 static bool ParamId_IsLockRequiredStep(ParamIdStep_t step)
 {
     return (step == PARAM_ID_STEP_RS || step == PARAM_ID_STEP_LD || step == PARAM_ID_STEP_LQ);
+}
+
+static bool ParamId_IsValidCanNodeId(uint8_t nodeId)
+{
+    return (nodeId <= CAN_NODE_ID_MASK);
 }
 
 static uint32_t ParamId_AngleRawDiffNative(uint32_t a, uint32_t b, uint32_t counts)
@@ -317,6 +323,7 @@ static void ParamId_BuildFlashData(ParamIdFlashData_t *out, const ParamIdResult_
     memset(out, 0, sizeof(*out));
     out->result = *result;
     out->pole_pairs = (uint32_t)MC_Get_Pole_Pairs();
+    out->can_node_id = s_can_node_id;
     out->curr_kp_si = PIDREGDQX_CURRENT_getKp_si(&g_axis.currCtrl.pid_IdIqX_obj);
     out->curr_wi_si = PIDREGDQX_CURRENT_getWi_si(&g_axis.currCtrl.pid_IdIqX_obj);
     if (jb != NULL)
@@ -791,6 +798,11 @@ bool ParamId_LoadFromFlash(ParamIdFlashData_t *data)
         return false;
     }
 
+    if (!ParamId_IsValidCanNodeId(blob->can_node_id))
+    {
+        return false;
+    }
+
     *data = *blob;
     return true;
 }
@@ -814,6 +826,11 @@ bool ParamId_ApplyFlashDataToAxis(const ParamIdFlashData_t *data)
     if (data->pole_pairs != 0U)
     {
         g_axis.uPolePairs = (uint8_t)data->pole_pairs;
+    }
+
+    if (ParamId_IsValidCanNodeId(data->can_node_id))
+    {
+        (void)ParamId_SetCanNodeId(data->can_node_id);
     }
 
     ParamId_CopyResultToAxis(&data->result);
@@ -843,11 +860,55 @@ bool ParamId_RestoreFromFlashToAxis(void)
     return ParamId_ApplyFlashDataToAxis(&data);
 }
 
+uint8_t ParamId_GetCanNodeId(void)
+{
+    return s_can_node_id;
+}
+
+bool ParamId_SetCanNodeId(uint8_t nodeId)
+{
+    if (!ParamId_IsValidCanNodeId(nodeId))
+    {
+        return false;
+    }
+
+    s_can_node_id = nodeId;
+    return true;
+}
+
+bool ParamId_SaveCanNodeIdToFlash(uint8_t nodeId)
+{
+    ParamIdFlashData_t data;
+    bool hasExistingFlash = false;
+
+    if (!ParamId_IsValidCanNodeId(nodeId))
+    {
+        return false;
+    }
+
+    memset(&data, 0, sizeof(data));
+    hasExistingFlash = ParamId_LoadFromFlash(&data);
+    if (!hasExistingFlash)
+    {
+        ParamId_BuildFlashData(&data, &s_param_id_module.result, NULL);
+    }
+
+    data.can_node_id = nodeId;
+    if (!ParamId_SaveToFlash(&data))
+    {
+        return false;
+    }
+
+    (void)ParamId_SetCanNodeId(nodeId);
+    return true;
+}
+
 void ParamId_ModuleInit(void)
 {
     ParamId_Init(&s_param_id_module);
     s_param_id_flash_save_pending = false;
     memset(&s_param_id_flash_pending_data, 0, sizeof(s_param_id_flash_pending_data));
+    s_can_node_id = 1U;
 }
 
 ParamIdRet_t ParamId_ModuleStart(ParamIdStep_t step)
