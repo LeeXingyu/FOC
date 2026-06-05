@@ -61,6 +61,14 @@ typedef struct
 
 typedef struct
 {
+    float i_avg_a;
+    float v_avg_v;
+    float calc_id_a;
+    float calc_iq_a;
+} ParamIdDebugData_t;
+
+typedef struct
+{
     /* Common limits */
     float maxCurrentA;
     float maxSpeedRpm;
@@ -126,6 +134,7 @@ ParamIdRet_t ParamId_Stop(ParamIdHandle_t *h);
 void ParamId_Service(ParamIdHandle_t *h);
 ParamIdState_t ParamId_GetState(const ParamIdHandle_t *h);
 const ParamIdResult_t *ParamId_GetResult(const ParamIdHandle_t *h);
+void ParamId_GetDebugData(ParamIdDebugData_t *data);
 void ParamId_GetDefaultConfig(ParamIdConfig_t *cfg);
 ParamIdRet_t ParamId_SetConfig(ParamIdHandle_t *h, const ParamIdConfig_t *cfg);
 

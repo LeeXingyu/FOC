@@ -34,6 +34,8 @@ typedef enum
     CAN_FC_RSP_PARAM_STATE  = 0x21U,
     CAN_FC_RSP_PARAM_RESULT1 = 0x22U,
     CAN_FC_RSP_PARAM_RESULT2 = 0x23U,
+    CAN_FC_RSP_PARAM_DEBUG1 = 0x24U,
+    CAN_FC_RSP_PARAM_DEBUG2 = 0x25U,
 #if APP_USE_CAN_FD
     CAN_FC_TELEM_FOC        = 0x30U,
     CAN_FC_TELEM_STATUS     = 0x31U,
@@ -51,12 +53,12 @@ typedef enum
 
 #define CAN_TX_QUEUE_DEPTH      16U
 
-#define CAN_TELEM_PERIOD_STATUS_MS      100U
-#define CAN_TELEM_PERIOD_CUR_REF_MS      20U
-#define CAN_TELEM_PERIOD_CUR_CALC_MS     20U
-#define CAN_TELEM_PERIOD_SPEED_MS        20U
-#define CAN_TELEM_PERIOD_VBUS_TEMP_MS   200U
-#define CAN_TELEM_PERIOD_TEMP_MS       1000U
+#define CAN_TELEM_PERIOD_STATUS_MS      1000U
+#define CAN_TELEM_PERIOD_CUR_REF_MS      500U
+#define CAN_TELEM_PERIOD_CUR_CALC_MS     500U
+#define CAN_TELEM_PERIOD_SPEED_MS        500U
+#define CAN_TELEM_PERIOD_VBUS_TEMP_MS   2000U
+#define CAN_TELEM_PERIOD_TEMP_MS       3000U
 
 typedef struct
 {
@@ -169,9 +171,15 @@ static void CAN_Telemetry_QueueParamSnapshotCommon(const ParamIdResult_t *result
     uint8_t stateFrame[APP_CAN_MAX_DATA_BYTES] = {0};
     uint8_t resultFrame1[APP_CAN_MAX_DATA_BYTES] = {0};
     uint8_t resultFrame2[APP_CAN_MAX_DATA_BYTES] = {0};
+    uint8_t debugFrame1[APP_CAN_MAX_DATA_BYTES] = {0};
+    uint8_t debugFrame2[APP_CAN_MAX_DATA_BYTES] = {0};
     uint8_t nodeId = ParamId_GetCanNodeId();
     uint8_t stateLen = 8U;
     uint8_t resultLen = 8U;
+    ParamIdDebugData_t debugData;
+
+    memset(&debugData, 0, sizeof(debugData));
+    ParamId_GetDebugData(&debugData);
 
     stateFrame[0] = (uint8_t)g_axis.state;
     stateFrame[1] = paramState;
@@ -212,6 +220,14 @@ static void CAN_Telemetry_QueueParamSnapshotCommon(const ParamIdResult_t *result
         (void)CAN_Telemetry_EnqueueFrame(CAN_Telemetry_BuildId(CAN_FC_RSP_PARAM_RESULT2, nodeId), resultFrame2, resultLen);
 #endif
     }
+
+    CAN_Telemetry_PackFloat(&debugFrame1[0], debugData.i_avg_a);
+    CAN_Telemetry_PackFloat(&debugFrame1[4], debugData.v_avg_v);
+    (void)CAN_Telemetry_EnqueueFrame(CAN_Telemetry_BuildId(CAN_FC_RSP_PARAM_DEBUG1, nodeId), debugFrame1, 8U);
+
+    CAN_Telemetry_PackFloat(&debugFrame2[0], debugData.calc_id_a);
+    CAN_Telemetry_PackFloat(&debugFrame2[4], debugData.calc_iq_a);
+    (void)CAN_Telemetry_EnqueueFrame(CAN_Telemetry_BuildId(CAN_FC_RSP_PARAM_DEBUG2, nodeId), debugFrame2, 8U);
 }
 
 void CAN_Telemetry_Init(void)

@@ -32,7 +32,7 @@ extern "C" {
 #define CAN_GET_NODE(id)             (uint8_t)((uint16_t)(id) & CAN_NODE_ID_MASK)
 
 #ifndef APP_USE_CAN_FD
-#define APP_USE_CAN_FD               1
+#define APP_USE_CAN_FD               0
 #endif
 
 #if APP_USE_CAN_FD

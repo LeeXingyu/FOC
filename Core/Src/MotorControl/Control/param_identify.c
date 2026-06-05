@@ -7,6 +7,7 @@
 #include "motor_parameters.h"
 #include "mc_interface.h"
 #include "curr_fbdk.h"
+#include "foc.h"
 #include "speed_pos_fbdk.h"
 #include "stm32g4xx_hal_flash.h"
 #include "pidregdqx_current.h"
@@ -15,6 +16,21 @@ static ParamIdHandle_t s_param_id_module;
 static bool s_param_id_flash_save_pending = false;
 static ParamIdFlashData_t s_param_id_flash_pending_data;
 static uint8_t s_can_node_id = 1U;
+static ParamIdDebugData_t s_param_id_debug_data;
+
+#define PARAM_ID_RS_MIN_OHM          (0.0001f)
+#define PARAM_ID_RS_MAX_OHM          (5.0f)
+#define PARAM_ID_L_MIN_H             (1.0e-7f)
+#define PARAM_ID_L_MAX_H             (5.0e-3f)
+/*
+ * Low-inductance motors (~tens of uH) need stronger excitation and a shorter
+ * measurement window, otherwise ADC offset/deadtime dominate the slope fit.
+ */
+#define PARAM_ID_L_STEP_DUTY         (0.020f)
+#define PARAM_ID_L_MIN_STEP_DUTY     (0.010f)
+#define PARAM_ID_L_MAX_STEP_DUTY     (0.120f)
+#define PARAM_ID_L_FINAL_AVG_DIV     (4U)
+#define PARAM_ID_L_TRACE_MAX         (1024U)
 
 /* ---------- Local helpers ---------- */
 static float ParamId_AbsF(float x)
@@ -33,6 +49,11 @@ static bool ParamId_IsBusy(const ParamIdHandle_t *h)
 static void ParamId_ResetResult(ParamIdResult_t *r)
 {
     memset(r, 0, sizeof(*r));
+}
+
+static void ParamId_ResetDebugData(void)
+{
+    memset(&s_param_id_debug_data, 0, sizeof(s_param_id_debug_data));
 }
 
 static void ParamId_ForceSafeOutput(void)
@@ -75,6 +96,102 @@ static float ParamId_GetElecSpeedRadPs(void)
     return 2.0f * 3.1415926f * ParamId_GetElecHz();
 }
 
+static void ParamId_GetPhaseCurrentsA(float *ir, float *is, float *it)
+{
+    if (ir != NULL)
+    {
+        *ir = FIXP30_toF(g_axis.currCtrl.IrstMeas.R) * CURRENT_SCALE;
+    }
+
+    if (is != NULL)
+    {
+        *is = FIXP30_toF(g_axis.currCtrl.IrstMeas.S) * CURRENT_SCALE;
+    }
+
+    if (it != NULL)
+    {
+        *it = FIXP30_toF(g_axis.currCtrl.IrstMeas.T) * CURRENT_SCALE;
+    }
+}
+
+static void ParamId_GetAppliedPhaseVoltages(float *vr, float *vs, float *vt)
+{
+    float vbusV = ParamId_GetVbusV();
+
+    if (g_axis.pPWMCHandle == NULL)
+    {
+        if (vr != NULL) { *vr = 0.0f; }
+        if (vs != NULL) { *vs = 0.0f; }
+        if (vt != NULL) { *vt = 0.0f; }
+        return;
+    }
+
+    if (vr != NULL)
+    {
+        *vr = FIXP30_toF(g_axis.pPWMCHandle->drstOut_pu.R) * (0.5f * vbusV);
+    }
+
+    if (vs != NULL)
+    {
+        *vs = FIXP30_toF(g_axis.pPWMCHandle->drstOut_pu.S) * (0.5f * vbusV);
+    }
+
+    if (vt != NULL)
+    {
+        *vt = FIXP30_toF(g_axis.pPWMCHandle->drstOut_pu.T) * (0.5f * vbusV);
+    }
+}
+
+static void ParamId_GetAppliedVoltageDQ(float *vd, float *vq)
+{
+    Duty_Drst_t appliedDrst;
+    Currents_Irst_t appliedIrst;
+    Currents_Iab_t appliedIab;
+    Currents_Idq_t appliedIdq;
+    fixp30_t anglePark_pu;
+    FIXP_CosSin_t cossinPark;
+    float vbusV = ParamId_GetVbusV();
+
+    if ((vd == NULL) || (vq == NULL))
+    {
+        return;
+    }
+
+    *vd = 0.0f;
+    *vq = 0.0f;
+
+    if (g_axis.pPWMCHandle == NULL)
+    {
+        return;
+    }
+
+    appliedDrst = g_axis.pPWMCHandle->drstOut_pu;
+    appliedIrst.R = appliedDrst.R;
+    appliedIrst.S = appliedDrst.S;
+    appliedIrst.T = appliedDrst.T;
+
+    Get_Angle(&anglePark_pu);
+    FIXP30_CosSinPU(anglePark_pu, &cossinPark);
+    Clarke_Current(appliedIrst, &appliedIab);
+    Park_Current(appliedIab, &cossinPark, &appliedIdq);
+
+    /*
+     * drstOut_pu is centered around 50% duty. The corresponding phase voltage
+     * relative to the half-bus midpoint is approximately duty * Vbus / 2.
+     */
+    *vd = FIXP30_toF(appliedIdq.D) * (0.5f * vbusV);
+    *vq = FIXP30_toF(appliedIdq.Q) * (0.5f * vbusV);
+}
+
+static float ParamId_GetAppliedVoltageAxis(bool isD)
+{
+    float vd;
+    float vq;
+
+    ParamId_GetAppliedVoltageDQ(&vd, &vq);
+    return isD ? vd : vq;
+}
+
 static bool ParamId_CheckProtection(const ParamIdHandle_t *h)
 {
     float iqAbs = ParamId_AbsF(ParamId_GetIqA());
@@ -113,6 +230,15 @@ static ParamIdStep_t ParamId_NextStep(ParamIdStep_t step)
 /* User may move this address to a dedicated page in linker script. */
 #define PARAM_ID_FLASH_ADDR         (0x0803F800UL)
 #define PARAM_ID_FLASH_PAGE_SIZE    (2048UL)
+
+/* Default motor preset for boards that should run without Rs/Ld auto-identification. */
+#define PARAM_ID_DEFAULT_RS_OHM     (0.120f)
+#define PARAM_ID_DEFAULT_LD_H       (50.0e-6f)
+#define PARAM_ID_DEFAULT_LQ_H       (50.0e-6f)
+#define PARAM_ID_DEFAULT_KE         (0.0f)
+#define PARAM_ID_DEFAULT_POLE_PAIRS (7U)
+#define PARAM_ID_DEFAULT_CURR_KP    (0.15f)
+#define PARAM_ID_DEFAULT_CURR_WI    (20.0f)
 
 /* J/B least-square estimation runtime cache */
 typedef struct
@@ -360,6 +486,28 @@ static void ParamId_CopyResultToAxis(const ParamIdResult_t *result)
     }
 }
 
+static void ParamId_BuildDefaultFlashData(ParamIdFlashData_t *out)
+{
+    if (out == NULL)
+    {
+        return;
+    }
+
+    memset(out, 0, sizeof(*out));
+    out->result.validRs = true;
+    out->result.validLd = true;
+    out->result.validLq = true;
+    out->result.validKe = false;
+    out->result.rs_ohm = PARAM_ID_DEFAULT_RS_OHM;
+    out->result.ld_h = PARAM_ID_DEFAULT_LD_H;
+    out->result.lq_h = PARAM_ID_DEFAULT_LQ_H;
+    out->result.ke_v_per_rad_s = PARAM_ID_DEFAULT_KE;
+    out->pole_pairs = PARAM_ID_DEFAULT_POLE_PAIRS;
+    out->can_node_id = 1U;
+    out->curr_kp_si = PARAM_ID_DEFAULT_CURR_KP;
+    out->curr_wi_si = PARAM_ID_DEFAULT_CURR_WI;
+}
+
 /* ---------- Public API ---------- */
 void ParamId_GetDefaultConfig(ParamIdConfig_t *cfg)
 {
@@ -428,6 +576,7 @@ ParamIdRet_t ParamId_Start(ParamIdHandle_t *h, ParamIdStep_t step)
     }
 
     ParamId_ResetResult(&h->result);
+    ParamId_ResetDebugData();
     h->requestedStep = step;
     h->activeStep = (step == PARAM_ID_STEP_ALL) ? PARAM_ID_STEP_RS : step;
     h->tick = 0U;
@@ -469,6 +618,16 @@ const ParamIdResult_t *ParamId_GetResult(const ParamIdHandle_t *h)
     return &h->result;
 }
 
+void ParamId_GetDebugData(ParamIdDebugData_t *data)
+{
+    if (data == NULL)
+    {
+        return;
+    }
+
+    *data = s_param_id_debug_data;
+}
+
 /* ---------- Core state machine ---------- */
 void ParamId_Service(ParamIdHandle_t *h)
 {
@@ -476,7 +635,13 @@ void ParamId_Service(ParamIdHandle_t *h)
     static float sumB = 0.0f;
     static float sumCurrentA = 0.0f;
     static float sumVoltageV = 0.0f;
-    static float lastCurrA = 0.0f;
+    static float sumCurrentSq = 0.0f;
+    static float sumVoltageCurrent = 0.0f;
+    static float phaseStartCurrA = 0.0f;
+    static float phaseEndCurrA = 0.0f;
+    static float phaseVoltAcc = 0.0f;
+    static uint16_t phaseSampleCount = 0U;
+    static float lTraceCurrent[PARAM_ID_L_TRACE_MAX];
     static uint32_t lockStartRawNative = 0U;
     static ParamIdJBCache_t jbCache;
 
@@ -492,6 +657,8 @@ void ParamId_Service(ParamIdHandle_t *h)
 
     h->tick++;
     h->subTick++;
+    s_param_id_debug_data.calc_id_a = ParamId_GetIdA();
+    s_param_id_debug_data.calc_iq_a = ParamId_GetIqA();
 
     if (h->stopRequested)
     {
@@ -513,7 +680,13 @@ void ParamId_Service(ParamIdHandle_t *h)
         sumB = 0.0f;
         sumCurrentA = 0.0f;
         sumVoltageV = 0.0f;
-        lastCurrA = 0.0f;
+        sumCurrentSq = 0.0f;
+        sumVoltageCurrent = 0.0f;
+        phaseStartCurrA = 0.0f;
+        phaseEndCurrA = 0.0f;
+        phaseVoltAcc = 0.0f;
+        phaseSampleCount = 0U;
+        memset(lTraceCurrent, 0, sizeof(lTraceCurrent));
 
         MC_Set_Control_Mode(CTRL_MODE_OPEN_LOOP);
         MC_Set_Speed_Reference(0.0f);
@@ -572,19 +745,39 @@ void ParamId_Service(ParamIdHandle_t *h)
     {
         case PARAM_ID_STEP_RS:
         {
-            /* Lock rotor and inject small q-axis duty, then estimate Rs from V/I. */
+            /* Lock rotor and inject small d-axis duty, then estimate Rs from V/I. */
             float targetA = h->cfg.rsCurrentA;
-            const float dutyQ = 0.03f;
+            const float dutyQ = 0.06f;
+            float rsEstimate = 0.0f;
 
             Duty_Ddq_t duty = {0};
-            duty.D = FIXP30(0.0f);
-            duty.Q = FIXP30(dutyQ);
+            duty.D = FIXP30(dutyQ);
+            duty.Q = FIXP30(0.0f);
             MC_Set_Duty_Cycle(duty);
 
             if (h->subTick > h->cfg.settleTicks)
             {
-                sumCurrentA += ParamId_GetIqA();
-                sumVoltageV += ParamId_GetVbusV() * dutyQ;
+                float irA;
+                float isA;
+                float itA;
+                float vrV;
+                float vsV;
+                float vtV;
+                float currentMag;
+                float voltageMag;
+
+                ParamId_GetPhaseCurrentsA(&irA, &isA, &itA);
+                ParamId_GetAppliedPhaseVoltages(&vrV, &vsV, &vtV);
+                currentMag = sqrtf((irA * irA) + (isA * isA) + (itA * itA));
+                voltageMag = sqrtf((vrV * vrV) + (vsV * vsV) + (vtV * vtV));
+
+                sumCurrentA += currentMag;
+                sumVoltageV += voltageMag;
+                sumCurrentSq += (irA * irA) + (isA * isA) + (itA * itA);
+                sumVoltageCurrent += (vrV * irA) + (vsV * isA) + (vtV * itA);
+
+                s_param_id_debug_data.i_avg_a = sumCurrentA / (float)(h->subTick - h->cfg.settleTicks);
+                s_param_id_debug_data.v_avg_v = sumVoltageV / (float)(h->subTick - h->cfg.settleTicks);
             }
 
             if (h->subTick >= (uint16_t)(h->cfg.settleTicks + h->cfg.sampleTicks))
@@ -594,10 +787,22 @@ void ParamId_Service(ParamIdHandle_t *h)
                 float vAvg = sumVoltageV / sampleCount;
                 if (ParamId_AbsF(iAvg) > (0.1f * targetA))
                 {
-                    h->result.rs_ohm = vAvg / iAvg;
-                    h->result.validRs = true;
-                    g_axis.fRs = h->result.rs_ohm;
+                    rsEstimate = (sumCurrentSq > 1e-6f) ? (sumVoltageCurrent / sumCurrentSq) : 0.0f;
+                    if ((rsEstimate > PARAM_ID_RS_MIN_OHM) && (rsEstimate < PARAM_ID_RS_MAX_OHM))
+                    {
+                        h->result.rs_ohm = rsEstimate;
+                        h->result.validRs = true;
+                        g_axis.fRs = h->result.rs_ohm;
+                    }
+                    else
+                    {
+                        h->result.rs_ohm = 0.0f;
+                        h->result.validRs = false;
+                    }
                 }
+
+                s_param_id_debug_data.i_avg_a = iAvg;
+                s_param_id_debug_data.v_avg_v = vAvg;
 
                 h->subTick = 0U;
                 if (h->requestedStep == PARAM_ID_STEP_ALL)
@@ -617,55 +822,158 @@ void ParamId_Service(ParamIdHandle_t *h)
         case PARAM_ID_STEP_LD:
         case PARAM_ID_STEP_LQ:
         {
-            /* Small current step, estimate L from L = (V - R*I) / (dI/dt). */
+            /*
+             * Step-response identification:
+             * apply a fixed d/q-axis voltage step while rotor is locked, record
+             * current response, then estimate tau at the 63.2% point of the RL
+             * first-order curve. Finally L = tau * Rs.
+             */
             bool isD = (h->activeStep == PARAM_ID_STEP_LD);
             float stepA = isD ? h->cfg.ldStepCurrentA : h->cfg.lqStepCurrentA;
-            (void)stepA;
-            const float dutyStep = 0.02f;
+            float stepDuty = PARAM_ID_L_STEP_DUTY;
+            float currA;
+            float vAxis;
+            float lavg = 0.0f;
+            float rsComp = h->result.validRs ? h->result.rs_ohm : g_axis.fRs;
+            const float dt = 1.0f / (float)TF_REGULATION_RATE;
+            uint16_t sampleIndex = 0U;
+            uint16_t finalWindowTicks = (uint16_t)(h->cfg.sampleTicks / PARAM_ID_L_FINAL_AVG_DIV);
+            float iStart;
+            float iFinal = 0.0f;
+            float deltaI;
+            float threshold;
+            uint16_t tauIndex = 0xFFFFU;
 
             Duty_Ddq_t duty = {0};
-            if (isD)
+
+            if (stepA > 0.0f)
             {
-                duty.D = (h->subTick < h->cfg.settleTicks) ? FIXP30(0.0f) : FIXP30(dutyStep);
-                duty.Q = FIXP30(0.0f);
+                float normalizedDuty = stepA / CURRENT_SCALE;
+                if (normalizedDuty < stepDuty)
+                {
+                    stepDuty = normalizedDuty;
+                }
+            }
+            if (stepDuty < PARAM_ID_L_MIN_STEP_DUTY)
+            {
+                stepDuty = PARAM_ID_L_MIN_STEP_DUTY;
+            }
+            if (stepDuty > PARAM_ID_L_MAX_STEP_DUTY)
+            {
+                stepDuty = PARAM_ID_L_MAX_STEP_DUTY;
+            }
+            if (finalWindowTicks < 8U)
+            {
+                finalWindowTicks = 8U;
+            }
+            if (finalWindowTicks > h->cfg.sampleTicks)
+            {
+                finalWindowTicks = h->cfg.sampleTicks;
+            }
+
+            if (h->subTick <= h->cfg.settleTicks)
+            {
+                if (isD)
+                {
+                    duty.D = FIXP30(0.0f);
+                    duty.Q = FIXP30(0.0f);
+                }
+                else
+                {
+                    duty.D = FIXP30(0.0f);
+                    duty.Q = FIXP30(0.0f);
+                }
             }
             else
             {
-                duty.D = FIXP30(0.0f);
-                duty.Q = (h->subTick < h->cfg.settleTicks) ? FIXP30(0.0f) : FIXP30(dutyStep);
+                if (isD)
+                {
+                    duty.D = FIXP30(stepDuty);
+                    duty.Q = FIXP30(0.0f);
+                }
+                else
+                {
+                    duty.D = FIXP30(0.0f);
+                    duty.Q = FIXP30(stepDuty);
+                }
             }
             MC_Set_Duty_Cycle(duty);
 
             if (h->subTick == h->cfg.settleTicks)
             {
-                lastCurrA = isD ? ParamId_GetIdA() : ParamId_GetIqA();
-                sumA = 0.0f;
-                sumB = 0.0f;
+                phaseStartCurrA = isD ? ParamId_GetIdA() : ParamId_GetIqA();
+                phaseEndCurrA = phaseStartCurrA;
+                phaseVoltAcc = 0.0f;
+                phaseSampleCount = 0U;
             }
             else if (h->subTick > h->cfg.settleTicks)
             {
-                float currA = isD ? ParamId_GetIdA() : ParamId_GetIqA();
-                float dI = currA - lastCurrA;
-                float dt = 1.0f / (float)TF_REGULATION_RATE;
-                float didt = dI / dt;
-                float v = ParamId_GetVbusV() * dutyStep;
-                float rs = h->result.validRs ? h->result.rs_ohm : 0.0f;
-                float l = 0.0f;
+                sampleIndex = (uint16_t)(h->subTick - h->cfg.settleTicks - 1U);
+                currA = isD ? ParamId_GetIdA() : ParamId_GetIqA();
+                vAxis = ParamId_GetAppliedVoltageAxis(isD);
 
-                if (ParamId_AbsF(didt) > 1e-3f)
+                if (sampleIndex == 0U)
                 {
-                    l = (v - rs * currA) / didt;
+                    phaseStartCurrA = currA;
+                    phaseEndCurrA = currA;
                 }
 
-                sumA += l;
-                sumB += 1.0f;
-                lastCurrA = currA;
+                if (sampleIndex < PARAM_ID_L_TRACE_MAX)
+                {
+                    lTraceCurrent[sampleIndex] = currA;
+                }
+
+                phaseVoltAcc += vAxis;
+                phaseSampleCount++;
+                phaseEndCurrA = currA;
+                sumCurrentA += currA;
+
+                if (sampleIndex >= (uint16_t)(h->cfg.sampleTicks - finalWindowTicks))
+                {
+                    sumA += currA;
+                    sumB += 1.0f;
+                }
             }
 
             if (h->subTick >= (uint16_t)(h->cfg.settleTicks + h->cfg.sampleTicks))
             {
-                float lavg = (sumB > 0.0f) ? (sumA / sumB) : 0.0f;
-                if (lavg > 0.0f && lavg < 1.0f)
+                if ((sumB > 0.0f) && (rsComp > PARAM_ID_RS_MIN_OHM))
+                {
+                    iStart = phaseStartCurrA;
+                    iFinal = sumA / sumB;
+                    deltaI = iFinal - iStart;
+                    threshold = iStart + 0.632f * deltaI;
+                    s_param_id_debug_data.i_avg_a = iFinal;
+                    s_param_id_debug_data.v_avg_v = phaseVoltAcc / (float)phaseSampleCount;
+
+                    if (ParamId_AbsF(deltaI) > 0.02f)
+                    {
+                        uint16_t maxSamples = h->cfg.sampleTicks;
+                        if (maxSamples > PARAM_ID_L_TRACE_MAX)
+                        {
+                            maxSamples = PARAM_ID_L_TRACE_MAX;
+                        }
+
+                        for (uint16_t i = 0U; i < maxSamples; i++)
+                        {
+                            float sampleI = lTraceCurrent[i];
+                            bool crossed = (deltaI >= 0.0f) ? (sampleI >= threshold) : (sampleI <= threshold);
+                            if (crossed)
+                            {
+                                tauIndex = i;
+                                break;
+                            }
+                        }
+
+                        if (tauIndex != 0xFFFFU)
+                        {
+                            float tau = ((float)(tauIndex + 1U)) * dt;
+                            lavg = tau * rsComp;
+                        }
+                    }
+                }
+
+                if ((lavg > PARAM_ID_L_MIN_H) && (lavg < PARAM_ID_L_MAX_H))
                 {
                     if (isD)
                     {
@@ -679,6 +987,16 @@ void ParamId_Service(ParamIdHandle_t *h)
                         h->result.validLq = true;
                         g_axis.fLs = lavg;
                     }
+                }
+                else if (isD)
+                {
+                    h->result.ld_h = 0.0f;
+                    h->result.validLd = false;
+                }
+                else
+                {
+                    h->result.lq_h = 0.0f;
+                    h->result.validLq = false;
                 }
 
                 h->subTick = 0U;
@@ -707,7 +1025,7 @@ void ParamId_Service(ParamIdHandle_t *h)
 
             if (h->subTick > h->cfg.settleTicks)
             {
-                float vq = ParamId_GetVbusV() * FIXP30_toF(g_axis.currCtrl.outIdq.Q);
+                float vq = ParamId_GetAppliedVoltageAxis(false);
                 float iq = ParamId_GetIqA();
                 float rs = h->result.validRs ? h->result.rs_ohm : 0.0f;
                 float we = ParamId_GetElecSpeedRadPs();
@@ -905,10 +1223,19 @@ bool ParamId_SaveCanNodeIdToFlash(uint8_t nodeId)
 
 void ParamId_ModuleInit(void)
 {
+    ParamIdFlashData_t defaultData;
+
     ParamId_Init(&s_param_id_module);
     s_param_id_flash_save_pending = false;
     memset(&s_param_id_flash_pending_data, 0, sizeof(s_param_id_flash_pending_data));
     s_can_node_id = 1U;
+    ParamId_ResetDebugData();
+
+    if (!ParamId_LoadFromFlash(&defaultData))
+    {
+        ParamId_BuildDefaultFlashData(&defaultData);
+        (void)ParamId_SaveToFlash(&defaultData);
+    }
 }
 
 ParamIdRet_t ParamId_ModuleStart(ParamIdStep_t step)

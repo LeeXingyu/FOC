@@ -8,7 +8,7 @@
 #ifndef INC_MOTORCONTROL_CORE_MOTOR_PARAMETERS_H_
 #define INC_MOTORCONTROL_CORE_MOTOR_PARAMETERS_H_
 
-#define POLE_PAIR_NUM           			14 					/* 电机极对数 */
+#define POLE_PAIR_NUM           			7 					/* 电机极对数 */
 #define PWM_FREQUENCY						16000				/* pwm 频率 */
 #define REGULATION_EXECUTION_RATE           1
 
@@ -24,6 +24,7 @@
 #define VOLTAGE_SCALE                       (float_t)(264) 		/* 电压归一化计算比例尺 */
 #define FREQUENCY_SCALE                     (float_t)(1000.0f) 	/* 电机转动频率归一化计算比例尺 */
 
+#define MOTOR_ENCODER_REVERSE               1
 #define TIM_CLOCK_HZ        170000000U
 #define PWM_FREQ_HZ         16000U
 #define HALF_PWM_PERIOD     (TIM_CLOCK_HZ / (2 * PWM_FREQ_HZ))

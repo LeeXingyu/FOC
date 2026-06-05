@@ -11,6 +11,7 @@ static ParamIdState_t s_param_state_prev = PARAM_ID_STATE_IDLE;
 
 #define CAN_CMD_SPEED_ABS_LIMIT_RPM  30000.0f
 #define CAN_CMD_GAIN_MAX             1000.0f
+#define CAN_TX_WAIT_TIMEOUT_MS       5U
 
 typedef enum
 {
@@ -48,7 +49,7 @@ typedef enum
 #endif
 } CanFuncCode_t;
 
-#define CAN_MODE_SWITCH_TIMEOUT_MS   10U
+#define CAN_MODE_SWITCH_TIMEOUT_MS   100U
 
 static bool Can_WaitOpMode(CAN_OPERATION_MODE mode)
 {
@@ -565,19 +566,22 @@ void MCP2518FD_TransmitMessageQueue(CANFDSPI_MODULE_ID index, uint16_t id, uint8
 	CAN_TX_FIFO_EVENT txFlags;
 	CAN_TX_MSGOBJ txObj;
     uint8_t n;
-
-    do
+    
+#ifdef APP_USE_TX_INT
+    if (!APP_TX_INT())
     {
-#ifdef APP_USE_TX_INT
-        HAL_Delay(50);
-#else
-        DRV_CANFDSPI_TransmitChannelEventGet(index, CAN_FIFO_CH2, &txFlags);
-#endif
+        s_mcp2518_status.tx_timeout_count++;
+        s_mcp2518_status.tx_drop_count++;
+        return;
     }
-#ifdef APP_USE_TX_INT
-    while (!APP_TX_INT());
 #else
-    while (!(txFlags & CAN_TX_FIFO_NOT_FULL_EVENT));
+    DRV_CANFDSPI_TransmitChannelEventGet(index, CAN_FIFO_CH2, &txFlags);
+    if ((txFlags & CAN_TX_FIFO_NOT_FULL_EVENT) == 0U)
+    {
+        s_mcp2518_status.tx_timeout_count++;
+        s_mcp2518_status.tx_drop_count++;
+        return;
+    }
 #endif
 
     n = DRV_CANFDSPI_DlcToDataBytes(len);
@@ -646,6 +650,9 @@ void MCP2518FD_ProcessRxIrq(void)
 void MCP2518FD_Service1ms(void)
 {
     ParamIdState_t stateNow;
+
+    /* Poll RX FIFO as a safety net in case the interrupt edge is missed. */
+    MCP2518FD_ReceiveMessage(DRV_CANFDSPI_INDEX_0, APP_CAN_RX_FETCH_BYTES);
 
     stateNow = MC_Calib_GetParamState();
     if (stateNow != s_param_state_prev)

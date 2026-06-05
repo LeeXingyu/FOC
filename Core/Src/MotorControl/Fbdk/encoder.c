@@ -1,6 +1,7 @@
 #include "encoder.h"
 #include "speed_pos_type.h"
 #include "stm32g4xx_hal.h"
+#include "motor_parameters.h"
 
 extern SPI_HandleTypeDef hspi1;
 extern SPI_HandleTypeDef hspi3;
@@ -114,6 +115,25 @@ static uint16_t Encoder_NormalizeToCompat16(uint32_t raw_native, uint32_t native
 
     raw_native %= native_counts;
     return (uint16_t)(((uint64_t)raw_native * 65535ULL) / (uint64_t)(native_counts - 1U));
+}
+
+static uint32_t Encoder_ApplyDirection(EncoderId_t id, uint32_t raw_native, uint32_t native_counts)
+{
+    if (native_counts <= 1U)
+    {
+        return 0U;
+    }
+
+    raw_native %= native_counts;
+
+#if MOTOR_ENCODER_REVERSE
+    if (id == ENC_ID_MOTOR)
+    {
+        return (raw_native == 0U) ? 0U : (native_counts - raw_native);
+    }
+#endif
+
+    return raw_native;
 }
 
 static HAL_StatusTypeDef Encoder_InitDevice(EncoderDev_t *pdev)
@@ -390,6 +410,10 @@ void Encoder_SpiDmaCpltCallback(SPI_HandleTypeDef *hspi)
         {
             if (Encoder_CompleteRead(&s_enc[i], hspi) == HAL_OK)
             {
+                uint32_t native_counts = Encoder_CountFromType(s_enc[i].type);
+
+                s_enc[i].raw_native = Encoder_ApplyDirection((EncoderId_t)i, s_enc[i].raw_native, native_counts);
+                s_enc[i].angle_deg = ((float)s_enc[i].raw_native * 360.0f) / (float)native_counts;
                 s_enc[i].timeout_count = 0U;
                 Encoder_UpdateCompatFeedback(&s_enc[i]);
 

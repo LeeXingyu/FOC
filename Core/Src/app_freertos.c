@@ -68,7 +68,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t Comm_TaskHandle;
 const osThreadAttr_t Comm_Task_attributes = {
   .name = "Comm_Task",
-  .priority = (osPriority_t) osPriorityLow,
+  .priority = (osPriority_t) osPriorityNormal,
   .stack_size = 128 * 4
 };
 
@@ -161,14 +161,10 @@ void Communication_Task(void *argument)
   {
     if (g_system_comm_mode == COMM_PROTO_CAN)
     {
-      CAN_Telemetry_Service1ms();
-      MCP2518FD_Service1ms();
-
       if (g_comm_int_irq_pending != 0U)
       {
         g_comm_int_irq_pending = 0U;
         MCP2518FD_ProcessRxIrq();
-        CAN_Telemetry_Service1ms();
       }
 
       if (g_comm_io1_irq_pending != 0U)
@@ -180,6 +176,9 @@ void Communication_Task(void *argument)
       {
         g_comm_io2_irq_pending = 0U;
       }
+
+      MCP2518FD_Service1ms();
+      CAN_Telemetry_Service1ms();
     }
     else if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
     {

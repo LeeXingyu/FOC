@@ -83,7 +83,7 @@ void Motor_Control_Init(void)
 
 	// 卡尔曼滤波初始化
 	Kalman_Filter_Init(&g_motorSpeedKalmanFilter, KF_R, KF_Q);
-	MC_Calib_Init();
+	//MC_Calib_Init();
 
 	/* 开环参数初始化 */
 	g_axis.posCtrl.hzToStepAngle_pu = FIXP30(FREQUENCY_SCALE / PWM_FREQUENCY);
@@ -108,10 +108,11 @@ void Motor_Control_Init(void)
 
 	// 先按默认值初始化控制器，再尝试用 Flash 中的历史标定值覆盖。
 	PID_All_Init();
-	(void)ParamId_RestoreFromFlashToAxis();
+	//(void)ParamId_RestoreFromFlashToAxis();
 
 	// 速度相关
-	float fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * 50.0f) / 60.0f;
+	//float fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * 50.0f) / 60.0f;
+	float fElectricalFreqHz = ((float)POLE_PAIR_NUM* 50.0f) / 60.0f;
 	g_axis.speedCtrl.speedRef_pu = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0F);
 

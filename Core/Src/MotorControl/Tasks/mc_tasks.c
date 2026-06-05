@@ -17,6 +17,8 @@
 
 static uint16_t FOC_Controller(void);
 static void Param_Calib_Handle(void);
+static void Param_Calib_SampleFeedback(void);
+static void Param_Calib_ApplyDuty(void);
 
 /**
  * @brief  高频任务（tim1定时器触发16khz+）
@@ -24,7 +26,7 @@ static void Param_Calib_Handle(void);
 void High_Frequency_Task(void)
 {
     // 异步读取两个编码器（SPI1 + SPI3）
-    //(void)Start_Encoder_Read(ENC_ID_MOTOR);
+    (void)Start_Encoder_Read(ENC_ID_MOTOR);
     //(void)Start_Encoder_Read(ENC_ID_LOAD);
 
     uint16_t uFOCreturn;
@@ -260,15 +262,9 @@ void Offset_Encoder_Handle()
 		g_axis.posCtrl.uOffsetAngleRawNative = Get_Angle_RawNative();
 		g_axis.posCtrl.uCalibCount = 0;
 		g_axis.posCtrl.bCalibFlag = true;
-		if (ParamId_ModuleStart(PARAM_ID_STEP_ALL) == PARAM_ID_OK)
-		{
-			g_axis.state = AXIS_STATE_PARAM_CALIB;
-		}
-		else
-		{
-			g_axis.error = (AxisError_t)(g_axis.error | AXIS_ERROR_CALIBRATION_FAILED);
-			g_axis.state = AXIS_STATE_FAULT_NOW;
-		}
+		MC_Set_Speed_Reference(0.0f);
+		MC_Set_Control_Mode(CTRL_MODE_SPEED);
+		g_axis.state = AXIS_STATE_RUN;
 	}
 }
 
@@ -276,18 +272,53 @@ static void Param_Calib_Handle(void)
 {
 	ParamIdState_t state;
 
+	Param_Calib_SampleFeedback();
+	Param_Calib_ApplyDuty();
 	ParamId_ModuleService();
 	state = ParamId_ModuleGetState();
 
 	if (state == PARAM_ID_STATE_DONE)
 	{
-		g_axis.state = AXIS_STATE_RUN;
+		Duty_Ddq_t duty = {0};
+		MC_Set_Speed_Reference(0.0f);
+		MC_Set_Duty_Cycle(duty);
+		MC_Set_Control_Mode(CTRL_MODE_OPEN_LOOP);
+		g_axis.state = AXIS_STATE_IDLE;
 	}
 	else if (state == PARAM_ID_STATE_FAULT)
 	{
 		g_axis.error = (AxisError_t)(g_axis.error | AXIS_ERROR_CALIBRATION_FAILED);
 		g_axis.state = AXIS_STATE_FAULT_NOW;
 	}
+}
+
+static void Param_Calib_SampleFeedback(void)
+{
+	fixp30_t anglePark_pu;
+	FIXP_CosSin_t cossinPark;
+
+	Get_Vbus_Measurements(g_axis.pPWMCHandle, &g_axis.busVoltage);
+	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
+
+	Get_Angle(&anglePark_pu);
+	FIXP30_CosSinPU(anglePark_pu, &cossinPark);
+	Clarke_Current(g_axis.currCtrl.IrstMeas, &g_axis.currCtrl.calcIab);
+	Park_Current(g_axis.currCtrl.calcIab, &cossinPark, &g_axis.currCtrl.calcIdq);
+}
+
+static void Param_Calib_ApplyDuty(void)
+{
+	fixp30_t anglePark_pu;
+	FIXP_CosSin_t cossinPark;
+	Duty_Dab_t dutyAB;
+	Duty_Drst_t dutyRst;
+
+	Get_Angle(&anglePark_pu);
+	FIXP30_CosSinPU(anglePark_pu, &cossinPark);
+	Inv_Park_Duty(g_axis.currCtrl.refIdq, &cossinPark, &dutyAB);
+	Inv_Clarke_Duty(dutyAB, &dutyRst);
+	SwitchOn_PWM(g_axis.pPWMCHandle);
+	Set_Phase_Duty(g_axis.pPWMCHandle, dutyRst);
 }
 
 void Run_Handle()
