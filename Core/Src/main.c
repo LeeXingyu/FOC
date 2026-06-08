@@ -31,6 +31,7 @@
 /* USER CODE BEGIN Includes */
 #include "drv8353rs.h"
 #include "motor_control.h"
+#include "MotorControl/Tasks/mc_tasks.h"
 #include "motor_parameters.h"
 #include "Communication/ethercat.h"
 #include "Communication/mcp2518fd/can_telemetry.h"
@@ -123,6 +124,7 @@ int main(void)
   //HAL_Delay(1000);
   //CDC_Transmit_FS ((uint8_t *)"Hello\r",6);
   Motor_Control_Init();
+  (void)MC_Calib_StartChain();
   DRV8353RS_Init();
   HAL_Delay(1000);
   /*DRV8353_SelfTest  Test SPI COMMUNICAT*/

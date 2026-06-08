@@ -24,17 +24,19 @@ static uint8_t MC_PolePairsOrDefault(void)
   */
 MC_RetStatus_t MC_Start_Motor(void)
 {
-	MC_RetStatus_t ret;
-	if (g_axis.state == AXIS_STATE_IDLE)
+	if (g_axis.state != AXIS_STATE_IDLE)
 	{
-		g_axis.state = AXIS_STATE_OFFSET_CALIB;
-		ret = MC_SUCCESS;
+		return MC_FAILED;
 	}
-	else
+
+	/* 只有基础校准完成后，才允许从 IDLE 进入 RUN。 */
+	if (g_axis.posCtrl.bCalibFlag == false)
 	{
-		ret = MC_FAILED;
+		return MC_FAILED;
 	}
-	return ret;
+
+	g_axis.state = AXIS_STATE_RUN;
+	return MC_SUCCESS;
 }
 
 /**

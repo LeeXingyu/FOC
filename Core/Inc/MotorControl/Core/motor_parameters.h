@@ -25,6 +25,7 @@
 #define FREQUENCY_SCALE                     (float_t)(1000.0f) 	/* 电机转动频率归一化计算比例尺 */
 
 #define MOTOR_ENCODER_REVERSE               1
+#define SPEED_MEAS_INVERT                   0   /* 速度反馈方向开关：0 正常，1 反向 */
 #define TIM_CLOCK_HZ        170000000U
 #define PWM_FREQ_HZ         16000U
 #define HALF_PWM_PERIOD     (TIM_CLOCK_HZ / (2 * PWM_FREQ_HZ))

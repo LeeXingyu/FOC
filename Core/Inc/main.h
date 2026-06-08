@@ -69,6 +69,9 @@ extern Comm_Protocol_t g_system_comm_mode;
 extern volatile uint8_t g_comm_io1_irq_pending;
 extern volatile uint8_t g_comm_io2_irq_pending;
 extern volatile uint8_t g_comm_int_irq_pending;
+extern volatile uint8_t g_mc_high_freq_busy;
+extern volatile uint8_t g_mc_medium_freq_busy;
+extern volatile uint32_t g_rtos_task_create_fail_mask;
 
 
 #define BOARD_ENCODER_TYPE_KTH7824   0U

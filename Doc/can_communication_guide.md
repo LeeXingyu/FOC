@@ -184,12 +184,18 @@ node = CAN_GET_NODE(sid)
 
 Command matching is based on function code.
 
+Current runtime semantics:
+
+- `START_MOTOR` is the run-enable command: `IDLE -> RUN`
+- `STOP_MOTOR` is the stop command: any allowed running/calibration path -> `IDLE`
+- base calibration is a separate chain and is not entered by `START_MOTOR`
+
 ### 7.1 Command function codes
 
 | Function code | Example SID for node `1` | Command | Payload length |
 | --- | --- | --- | --- |
-| `0x01` | `0x011` | stop motor | `0` |
-| `0x02` | `0x021` | start motor | `0` |
+| `0x01` | `0x011` | stop motor, return to `IDLE` | `0` |
+| `0x02` | `0x021` | start motor, enter `RUN` | `0` |
 | `0x03` | `0x031` | switch to speed mode | `0` |
 | `0x04` | `0x041` | switch to position mode | `0` |
 | `0x05` | `0x051` | switch to open loop / VF mode | `0` |
@@ -197,8 +203,8 @@ Command matching is based on function code.
 | `0x07` | `0x071` | set speed Kp | `4` |
 | `0x08` | `0x081` | set speed Ki | `4` |
 | `0x09` | `0x091` | set pole pairs | `1` |
-| `0x0A` | `0x0A1` | start calibration | `1` |
-| `0x0B` | `0x0B1` | stop calibration | `0` |
+| `0x0A` | `0x0A1` | start calibration chain or parameter calibration | `1` |
+| `0x0B` | `0x0B1` | stop parameter calibration | `0` |
 | `0x0C` | `0x0C1` | read flash params | `0` |
 | `0x0D` | `0x0D1` | clear flash | `0` |
 | `0x0E` | `0x0E1` | get node ID | `0` |
@@ -223,6 +229,18 @@ Supported values:
 
 - `0`: full chain
 - `5`: parameter identification full flow
+
+Base calibration flow:
+
+1. current offset calibration
+2. encoder calibration
+3. return to `IDLE`
+
+Parameter identification flow:
+
+- only allowed when the axis is already in `IDLE`
+- only allowed after the base calibration flag has been set
+- `CALIB_STOP` returns the axis to `IDLE`
 
 `SET_ID`
 
@@ -546,10 +564,19 @@ Flash content includes:
 
 Calibration-related commands:
 
-- `0x0A`: start calibration
-- `0x0B`: stop calibration
+- `0x0A`: start calibration chain or parameter calibration
+- `0x0B`: stop parameter calibration
 - `0x0C`: read flash parameters
 - `0x0D`: clear flash
+
+Calibration state rules:
+
+- `0x0A` with mode `0` starts the base calibration chain
+- the base chain runs current offset calibration first, then encoder calibration
+- after the base chain completes, the axis returns to `IDLE`
+- `0x0A` with mode `5` starts parameter identification
+- parameter identification is only accepted from `IDLE`
+- `0x0B` stops parameter identification and returns to `IDLE`
 
 ## 13. Practical Summary
 
@@ -558,6 +585,7 @@ Current design summary:
 - node ID uses lower 4 bits of standard 11-bit ID
 - command function codes are fixed and shared by CAN / CAN FD
 - response function codes `0x20 ~ 0x23` are fixed
+- `0x21` is a response function code for parameter state, not a command
 - telemetry function codes differ by compile-time mode
 - CAN FD tries to pack same-type runtime data into fewer larger frames
 - classical CAN keeps split runtime telemetry frames
@@ -572,7 +600,7 @@ Current design summary:
 Monitor:
 
 - `0x20x`: command response
-- `0x21x`: parameter state
+- `0x21x`: parameter state response
 - `0x22x`: parameter result
 - `0x30x`: FOC
 - `0x31x`: status

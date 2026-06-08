@@ -77,10 +77,6 @@ void Motor_Control_Init(void)
 	Sampling_Init();
 	Init_Encoder();
 
-	// 定时器开启
-	HAL_TIM_Base_Start_IT(&htim1);
-	HAL_TIM_Base_Start_IT(&htim3);
-
 	// 卡尔曼滤波初始化
 	Kalman_Filter_Init(&g_motorSpeedKalmanFilter, KF_R, KF_Q);
 	//MC_Calib_Init();
@@ -117,7 +113,7 @@ void Motor_Control_Init(void)
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0F);
 
 	g_axis.speedCtrl.speedRef_pu = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
-	MC_Set_Speed_Ramp(32.0f);
+	MC_Set_Speed_Ramp(128.0f);
 
 	// 初始化状态
 	g_axis.state = AXIS_STATE_IDLE;
@@ -129,6 +125,7 @@ void Motor_Control_Init(void)
 /**
   * @brief  foc控制
   */
+#define SPEED_MEAS_INVERT 1
 uint16_t FOC_Control(void)
 {
 
@@ -137,6 +134,10 @@ uint16_t FOC_Control(void)
 
 	// 获取母线电压
 	Get_Vbus_Measurements(g_axis.pPWMCHandle, &g_axis.busVoltage);
+	Get_Speed(&g_axis.speedCtrl.speedMeas_pu);
+#if SPEED_MEAS_INVERT
+	g_axis.speedCtrl.speedMeas_pu = -g_axis.speedCtrl.speedMeas_pu;
+#endif
 
 	// 速度环输出目标电流
 	static int iSpeedCount = 0;
@@ -272,7 +273,7 @@ fixp30_t Bus_Voltage_Compensation(CurrCtrl_t *pCurrCtrl, const fixp30_t udc_pu)
 void Open_Loop_Control()
 {
 	// 打开PWM输出
-	SwitchOn_PWM(g_axis.pPWMCHandle);
+	//SwitchOn_PWM(g_axis.pPWMCHandle);
 
 	// 电气角度
 	fixp30_t anglePark_pu;

@@ -28,11 +28,13 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "main.h"
+#include "tim.h"
 #include "motor_parameters.h"
 #include "tem_task.h"
 #include "canopen.h"
 #include "ethercat.h"
 #include "Communication/mcp2518fd/can_telemetry.h"
+#include "MotorControl/Tasks/mc_tasks.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -55,6 +57,12 @@
 volatile uint8_t g_comm_io1_irq_pending = 0U;
 volatile uint8_t g_comm_io2_irq_pending = 0U;
 volatile uint8_t g_comm_int_irq_pending = 0U;
+volatile uint8_t g_mc_high_freq_busy = 0U;
+volatile uint8_t g_mc_medium_freq_busy = 0U;
+volatile uint32_t g_rtos_task_create_fail_mask = 0U;
+
+osThreadId_t mcHighFreqTaskHandle = NULL;
+osThreadId_t mcMediumFreqTaskHandle = NULL;
 
 /* USER CODE END Variables */
 /* Definitions for defaultTask */
@@ -68,12 +76,26 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t Comm_TaskHandle;
 const osThreadAttr_t Comm_Task_attributes = {
   .name = "Comm_Task",
-  .priority = (osPriority_t) osPriorityNormal,
+  .priority = (osPriority_t) osPriorityAboveNormal,
   .stack_size = 128 * 4
 };
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
+static void RTOS_MarkTaskCreateFailure(uint32_t bit);
+
+const osThreadAttr_t mcHighFreqTask_attributes = {
+  .name = "mcHighFreqTask",
+  .priority = (osPriority_t) osPriorityAboveNormal,
+  .stack_size = 512 * 4
+};
+
+const osThreadAttr_t mcMediumFreqTask_attributes = {
+  .name = "mcMediumFreqTask",
+  .priority = (osPriority_t) osPriorityAboveNormal,
+  .stack_size = 256 * 4
+};
+
 osThreadId_t temTaskHandle;
 const osThreadAttr_t temTask_attributes = {
   .name = "temTask",
@@ -84,6 +106,11 @@ const osThreadAttr_t temTask_attributes = {
 
 void StartDefaultTask(void *argument);
 void Communication_Task(void *argument);
+
+static void RTOS_MarkTaskCreateFailure(uint32_t bit)
+{
+  g_rtos_task_create_fail_mask |= bit;
+}
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
@@ -115,15 +142,44 @@ void MX_FREERTOS_Init(void) {
 
   /* Create the thread(s) */
   /* creation of defaultTask */
-  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
-  /* creation of Comm_Task */
-  Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+  if (defaultTaskHandle == NULL)
+  {
+    RTOS_MarkTaskCreateFailure(1UL << 0);
+  }
+  /* creation of Comm_Task */
+  Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
+  if (Comm_TaskHandle == NULL)
+  {
+    RTOS_MarkTaskCreateFailure(1UL << 1);
+  }
   temTaskHandle = osThreadNew(Tem_Task, NULL, &temTask_attributes);
+  if (temTaskHandle == NULL)
+  {
+    RTOS_MarkTaskCreateFailure(1UL << 2);
+  }
+  /* creation of control tasks */
+  mcHighFreqTaskHandle = osThreadNew(StartHighFrequencyTask, NULL, &mcHighFreqTask_attributes);
+  if (mcHighFreqTaskHandle == NULL)
+  {
+    RTOS_MarkTaskCreateFailure(1UL << 3);
+  }
+  mcMediumFreqTaskHandle = osThreadNew(StartMediumFrequencyTask, NULL, &mcMediumFreqTask_attributes);
+  if (mcMediumFreqTaskHandle == NULL)
+  {
+    RTOS_MarkTaskCreateFailure(1UL << 4);
+  }
+
+
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
+
+  /* Start the control timers only after the task handles exist so IRQs can notify safely. */
+  (void)HAL_TIM_Base_Start_IT(&htim1);
+  (void)HAL_TIM_Base_Start_IT(&htim3);
 
   /* USER CODE BEGIN RTOS_EVENTS */
   /* add events, ... */

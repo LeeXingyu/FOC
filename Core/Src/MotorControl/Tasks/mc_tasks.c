@@ -14,6 +14,7 @@
 #include "motor_parameters.h"
 #include "encoder.h"
 #include "param_identify.h"
+#include "cmsis_os.h"
 
 static uint16_t FOC_Controller(void);
 static void Param_Calib_Handle(void);
@@ -91,6 +92,55 @@ void Medium_Frequency_Task()
 	ParamId_ModuleBackgroundService();
 }
 
+void StartHighFrequencyTask(void *argument)
+{
+    (void)argument;
+
+    for (;;)
+    {
+        uint32_t flags = osThreadFlagsWait(MC_HIGH_FREQ_TASK_FLAG,
+                                           osFlagsWaitAny,
+                                           osWaitForever);
+
+        if ((flags & osFlagsError) != 0U)
+        {
+            continue;
+        }
+
+        if ((flags & MC_HIGH_FREQ_TASK_FLAG) != 0U)
+        {
+            g_mc_high_freq_busy = 1U;
+            High_Frequency_Task();
+           
+        }
+		g_mc_high_freq_busy = 0U;
+    }
+}
+
+void StartMediumFrequencyTask(void *argument)
+{
+    (void)argument;
+
+    for (;;)
+    {
+        uint32_t flags = osThreadFlagsWait(MC_MEDIUM_FREQ_TASK_FLAG,
+                                           osFlagsWaitAny,
+                                           osWaitForever);
+
+        if ((flags & osFlagsError) != 0U)
+        {
+            continue;
+        }
+
+        if ((flags & MC_MEDIUM_FREQ_TASK_FLAG) != 0U)
+        {
+            g_mc_medium_freq_busy = 1U;
+            Medium_Frequency_Task();            
+        }
+		g_mc_medium_freq_busy = 0U;
+    }
+}
+
 /**
  * @brief  状态机转换
  */
@@ -124,7 +174,12 @@ MC_RetStatus_t MC_Calib_StartParam(ParamIdStep_t step)
 		return MC_FAILED;
 	}
 
-	if (g_axis.state != AXIS_STATE_RUN)
+	if (g_axis.state != AXIS_STATE_IDLE)
+	{
+		return MC_FAILED;
+	}
+
+	if (g_axis.posCtrl.bCalibFlag == false)
 	{
 		return MC_FAILED;
 	}
@@ -150,7 +205,7 @@ MC_RetStatus_t MC_Calib_StopParam(void)
 
 	if (g_axis.state == AXIS_STATE_PARAM_CALIB)
 	{
-		g_axis.state = AXIS_STATE_RUN;
+		g_axis.state = AXIS_STATE_IDLE;
 	}
 
 	return MC_SUCCESS;
@@ -175,7 +230,6 @@ void Idle_Handle()
 	SwitchOff_PWM(g_axis.pPWMCHandle);
 
 	g_axis.posCtrl.uCalibCount = 0;
-	g_axis.posCtrl.bCalibFlag = false;
 
 	PIDREGDQX_CURRENT_setUiD_pu(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(0.0f));
 	PIDREGDQX_CURRENT_setUiQ_pu(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(0.0f));
@@ -264,7 +318,7 @@ void Offset_Encoder_Handle()
 		g_axis.posCtrl.bCalibFlag = true;
 		MC_Set_Speed_Reference(0.0f);
 		MC_Set_Control_Mode(CTRL_MODE_SPEED);
-		g_axis.state = AXIS_STATE_RUN;
+		g_axis.state = AXIS_STATE_IDLE;
 	}
 }
 
@@ -323,6 +377,8 @@ static void Param_Calib_ApplyDuty(void)
 
 void Run_Handle()
 {
+	SwitchOn_PWM(g_axis.pPWMCHandle);
+
 	switch(g_axis.enCtrlMode)
 	{
 		case CTRL_MODE_OPEN_LOOP:
