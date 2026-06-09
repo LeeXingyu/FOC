@@ -62,6 +62,7 @@ ADC_Rule_Data_t g_adc_Rule_ID_Tem;
 Comm_Protocol_t g_system_comm_mode = COMM_PROTO_UNKNOWN;
 volatile uint8_t g_adc2_rule_dma_done = 0U;
 uint16_t g_adc2_rule_dma_buf[4] = {0U};
+volatile uint8_t g_mc_calib_go_run_after_finish = 0U;
 //extern char g_uartRxBuffer[UART3_DMA_BUF_SIZE];
 /* USER CODE END PV */
 
@@ -124,7 +125,6 @@ int main(void)
   //HAL_Delay(1000);
   //CDC_Transmit_FS ((uint8_t *)"Hello\r",6);
   Motor_Control_Init();
-  (void)MC_Calib_StartChain();
   DRV8353RS_Init();
   HAL_Delay(1000);
   /*DRV8353_SelfTest  Test SPI COMMUNICAT*/

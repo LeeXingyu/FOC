@@ -28,7 +28,13 @@ void Curr_Control(CurrCtrl_t *pCurrCtrl, CurrCtrlInput_t* pCurrCtrlInput);
 /**
   * @brief  速度控制（速度环）
   */
-void Speed_Control(SpeedCtrl_t *pSpeedCtrl);
+void Speed_Control(SpeedCtrl_t *pSpeedCtrl, ControlMode_En enControlMode);
+
+/**
+  * @brief  位置控制（位置环）
+  * @param  pPosCtrl	  	位置控制句柄
+  */
+void Position_Control(PosCtrl_t *pPosCtrl);
 
 fixp30_t Bus_Voltage_Compensation(CurrCtrl_t *pCurrCtrl, const fixp30_t udc_pu);
 

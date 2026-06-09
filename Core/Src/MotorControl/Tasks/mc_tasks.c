@@ -89,7 +89,7 @@ void Medium_Frequency_Task()
 		Calc_Speed(&g_axis.speedCtrl.speedMeas_pu);
 	}
 	
-	ParamId_ModuleBackgroundService();
+	//ParamId_ModuleBackgroundService();
 }
 
 void StartHighFrequencyTask(void *argument)
@@ -161,6 +161,7 @@ MC_RetStatus_t MC_Calib_StartChain(void)
 		return MC_FAILED;
 	}
 
+	g_mc_calib_go_run_after_finish = 0U;
 	g_axis.state = AXIS_STATE_OFFSET_CALIB;
 	return MC_SUCCESS;
 }
@@ -318,7 +319,15 @@ void Offset_Encoder_Handle()
 		g_axis.posCtrl.bCalibFlag = true;
 		MC_Set_Speed_Reference(0.0f);
 		MC_Set_Control_Mode(CTRL_MODE_SPEED);
-		g_axis.state = AXIS_STATE_IDLE;
+		if (g_mc_calib_go_run_after_finish != 0U)
+		{
+			g_mc_calib_go_run_after_finish = 0U;
+			g_axis.state = AXIS_STATE_RUN;
+		}
+		else
+		{
+			g_axis.state = AXIS_STATE_IDLE;
+		}
 	}
 }
 

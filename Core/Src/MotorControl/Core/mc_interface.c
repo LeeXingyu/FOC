@@ -29,13 +29,8 @@ MC_RetStatus_t MC_Start_Motor(void)
 		return MC_FAILED;
 	}
 
-	/* 只有基础校准完成后，才允许从 IDLE 进入 RUN。 */
-	if (g_axis.posCtrl.bCalibFlag == false)
-	{
-		return MC_FAILED;
-	}
-
-	g_axis.state = AXIS_STATE_RUN;
+	g_mc_calib_go_run_after_finish = 1U;
+	g_axis.state = AXIS_STATE_OFFSET_CALIB;
 	return MC_SUCCESS;
 }
 
@@ -44,6 +39,7 @@ MC_RetStatus_t MC_Start_Motor(void)
   */
 MC_RetStatus_t MC_Stop_Motor(void)
 {
+	g_mc_calib_go_run_after_finish = 0U;
 	g_axis.state = AXIS_STATE_IDLE;
 
 	return MC_SUCCESS;

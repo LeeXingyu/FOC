@@ -15,6 +15,9 @@
 #define TF_REGULATION_RATE                  (uint32_t)((uint32_t)(PWM_FREQUENCY) / (REGULATION_EXECUTION_RATE))
 #define BOARD_MAX_MODULATION                (float_t)((100 * 1.15f) /100.0f)
 #define SPEED_CONTROL_RATE					1000				/* 速度环频率 */
+#define SPEED_MEASUREMENT_RATE_HZ           1000.0f             /* 速度估算更新频率，需与TIM3一致 */
+#define SPEED_CONTROL_COUNT					16					// 速度环分频
+#define POSITION_CONTROL_COUNT				16					// 位置环分频
 
 #define RSHUNT                              0.005f				/* 采样电阻 */
 #define ADC_REFERENCE_VOLTAGE				3.3f				/* ADC参考电压 */

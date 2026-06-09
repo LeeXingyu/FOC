@@ -20,6 +20,8 @@ extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
 
 CurrentFilter_t iqFilter;
+volatile int32_t g_dbg_q_vector_sign = 0;
+volatile uint8_t g_dbg_dir_consistent = 0U;
 
 //空载
 #define KF_R 7.0f
@@ -76,7 +78,8 @@ void Motor_Control_Init(void)
 	// 电流、电压采样初始化（定时器、采样配置）
 	Sampling_Init();
 	Init_Encoder();
-
+	HAL_TIM_Base_Start_IT(&htim1);
+	HAL_TIM_Base_Start_IT(&htim3);
 	// 卡尔曼滤波初始化
 	Kalman_Filter_Init(&g_motorSpeedKalmanFilter, KF_R, KF_Q);
 	//MC_Calib_Init();
@@ -108,12 +111,10 @@ void Motor_Control_Init(void)
 
 	// 速度相关
 	//float fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * 50.0f) / 60.0f;
-	float fElectricalFreqHz = ((float)POLE_PAIR_NUM* 50.0f) / 60.0f;
+	float fElectricalFreqHz = ((float)POLE_PAIR_NUM* 2.0f) / 60.0f;
 	g_axis.speedCtrl.speedRef_pu = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0F);
-
-	g_axis.speedCtrl.speedRef_pu = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
-	MC_Set_Speed_Ramp(128.0f);
+	MC_Set_Speed_Ramp(15.0f);
 
 	// 初始化状态
 	g_axis.state = AXIS_STATE_IDLE;
@@ -125,7 +126,6 @@ void Motor_Control_Init(void)
 /**
   * @brief  foc控制
   */
-#define SPEED_MEAS_INVERT 1
 uint16_t FOC_Control(void)
 {
 
@@ -134,17 +134,30 @@ uint16_t FOC_Control(void)
 
 	// 获取母线电压
 	Get_Vbus_Measurements(g_axis.pPWMCHandle, &g_axis.busVoltage);
-	Get_Speed(&g_axis.speedCtrl.speedMeas_pu);
+	//Get_Speed(&g_axis.speedCtrl.speedMeas_pu);
 #if SPEED_MEAS_INVERT
 	g_axis.speedCtrl.speedMeas_pu = -g_axis.speedCtrl.speedMeas_pu;
 #endif
 
+//	// 位置环输出目标速度
+//	if (g_axis.enCtrlMode == CTRL_MODE_POSITION)
+//	{
+//		static int iPositionCount = 0;
+//		iPositionCount++;
+//		if (iPositionCount == POSITION_CONTROL_COUNT)
+//		{
+//			Position_Control(&g_axis.posCtrl);
+//			g_axis.speedCtrl.speedRef_pu = g_axis.posCtrl.speedOut_pu;
+//			iPositionCount = 0;
+//		}
+//	}
+
 	// 速度环输出目标电流
 	static int iSpeedCount = 0;
 	iSpeedCount++;
-	if (iSpeedCount == 16)
+	if (iSpeedCount == SPEED_CONTROL_COUNT)
 	{
-		Speed_Control(&g_axis.speedCtrl);
+		Speed_Control(&g_axis.speedCtrl, g_axis.enCtrlMode);
 		g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
 		iSpeedCount = 0;
 	}
@@ -227,32 +240,36 @@ void Curr_Control(CurrCtrl_t *pCurrCtrl, CurrCtrlInput_t* pCurrCtrlInput)
 /**
   * @brief  速度控制
   */
-void Speed_Control(SpeedCtrl_t *pSpeedCtrl)
+void Speed_Control(SpeedCtrl_t *pSpeedCtrl, ControlMode_En enControlMode)
 {
 	// 速度参考斜坡
 	fixp30_t speedRamp = pSpeedCtrl->speedRamp_pu;
 	fixp30_t speedDelta_pu = pSpeedCtrl->speedRef_pu - pSpeedCtrl->speedRefRamp_pu;
 	pSpeedCtrl->speedRefRamp_pu += FIXP_sat(speedDelta_pu, speedRamp, -speedRamp);
 
-//	pSpeedCtrl->speedRefRamp_pu = pSpeedCtrl->speedRef_pu;
-
-	/* 位置环t型规划 */
-
-	//
-//	pSpeedCtrl->iqOut_pu = PID_Run_FIXP30(
-//			&g_axis.speedCtrl.pid,
-//			pSpeedCtrl->speedRefRamp_pu,
-//			pSpeedCtrl->speedMeas_pu,
-//			FIXP30(0.0f)
-//		);
+	if (enControlMode == CTRL_MODE_POSITION)
+	{
+		pSpeedCtrl->speedRefRamp_pu = pSpeedCtrl->speedRef_pu;
+	}
 
 	fixp30_t speedError = pSpeedCtrl->speedRefRamp_pu - pSpeedCtrl->speedMeas_pu;
-	fixp30_t IqRef_pu = PIDREG_SPEED_run(&g_axis.speedCtrl.PIDSpeed, speedError);
+	fixp30_t IqRef_pu = PIDREG_SPEED_run(&pSpeedCtrl->PIDSpeed, speedError);
 
 	fixp30_t IqRefCircleMax = FIXP30(12.0 / CURRENT_SCALE);
 
 	pSpeedCtrl->iqOut_pu = FIXP_sat(IqRef_pu, IqRefCircleMax, -IqRefCircleMax);
 }
+
+/**
+  * @brief  位置控制（位置环）
+  */
+//void Position_Control(PosCtrl_t *pPosCtrl)
+//{
+//	 float fOutSpeed = Pid_Position_Run(pPosCtrl);
+//	 float fElectricalFreq = ((float)POLE_PAIR_NUM * fOutSpeed / 60.0f);
+//	 g_axis.posCtrl.speedOut_pu = FIXP30(fElectricalFreq / FREQUENCY_SCALE);
+//
+//}
 
 fixp30_t Bus_Voltage_Compensation(CurrCtrl_t *pCurrCtrl, const fixp30_t udc_pu)
 {
