@@ -319,6 +319,12 @@ void Offset_Encoder_Handle()
 		g_axis.posCtrl.bCalibFlag = true;
 		MC_Set_Speed_Reference(0.0f);
 		MC_Set_Control_Mode(CTRL_MODE_SPEED);
+		g_axis.currCtrl.refIdq.D = FIXP30(0.0f);
+		g_axis.currCtrl.refIdq.Q = FIXP30(0.0f);
+		g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
+		g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
+		PIDREG_SPEED_setUi_pu(&g_axis.speedCtrl.PIDSpeed, FIXP30(0.0f));
+		g_mc_calib_done_once = 1U;
 		if (g_mc_calib_go_run_after_finish != 0U)
 		{
 			g_mc_calib_go_run_after_finish = 0U;

@@ -61,5 +61,10 @@ void Sensor_Update_Kalman();
  */
 void Sensor_Update_PLL();
 
+/**
+ * @brief  重置速度/圈数估算历史，避免启动时旧值影响控制。
+ */
+void SpeedPos_ResetEstimator(void);
+
 
 #endif /* INC_MOTORCONTROL_FBDK_SPEED_POS_FBDK_H_ */

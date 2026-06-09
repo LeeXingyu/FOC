@@ -8,6 +8,8 @@
 #include "mc_interface.h"
 #include "main.h"
 #include "motor_parameters.h"
+#include "MotorControl/Fbdk/speed_pos_fbdk.h"
+#include "Utils/Pid/pidreg_speed.h"
 
 static uint8_t MC_PolePairsOrDefault(void)
 {
@@ -29,8 +31,23 @@ MC_RetStatus_t MC_Start_Motor(void)
 		return MC_FAILED;
 	}
 
-	g_mc_calib_go_run_after_finish = 1U;
-	g_axis.state = AXIS_STATE_OFFSET_CALIB;
+	MC_Set_Speed_Reference(0.0f);
+	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
+	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
+	g_axis.currCtrl.refIdq.Q = FIXP30(0.0f);
+	PIDREG_SPEED_setUi_pu(&g_axis.speedCtrl.PIDSpeed, FIXP30(0.0f));
+	SpeedPos_ResetEstimator();
+
+	if (g_mc_calib_done_once != 0U)
+	{
+		g_mc_calib_go_run_after_finish = 0U;
+		g_axis.state = AXIS_STATE_RUN;
+	}
+	else
+	{
+		g_mc_calib_go_run_after_finish = 1U;
+		g_axis.state = AXIS_STATE_OFFSET_CALIB;
+	}
 	return MC_SUCCESS;
 }
 
@@ -40,6 +57,12 @@ MC_RetStatus_t MC_Start_Motor(void)
 MC_RetStatus_t MC_Stop_Motor(void)
 {
 	g_mc_calib_go_run_after_finish = 0U;
+	MC_Set_Speed_Reference(0.0f);
+	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
+	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
+	g_axis.currCtrl.refIdq.Q = FIXP30(0.0f);
+	PIDREG_SPEED_setUi_pu(&g_axis.speedCtrl.PIDSpeed, FIXP30(0.0f));
+	SpeedPos_ResetEstimator();
 	g_axis.state = AXIS_STATE_IDLE;
 
 	return MC_SUCCESS;

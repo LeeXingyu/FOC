@@ -9,7 +9,7 @@
 static MCP2518FD_Status_t s_mcp2518_status = {0};
 static ParamIdState_t s_param_state_prev = PARAM_ID_STATE_IDLE;
 
-#define CAN_CMD_SPEED_ABS_LIMIT_RPM  10000.0f
+#define CAN_CMD_SPEED_ABS_LIMIT_RPM  1000.0f
 #define CAN_CMD_GAIN_MAX             1000.0f
 #define CAN_TX_WAIT_TIMEOUT_MS       5U
 

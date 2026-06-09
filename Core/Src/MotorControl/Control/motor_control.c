@@ -111,9 +111,9 @@ void Motor_Control_Init(void)
 
 	// 速度相关
 	//float fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * 50.0f) / 60.0f;
-	float fElectricalFreqHz = ((float)POLE_PAIR_NUM* 2.0f) / 60.0f;
-	g_axis.speedCtrl.speedRef_pu = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
-	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0F);
+	g_axis.speedCtrl.speedRef_pu = FIXP30(0.0f);
+	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
+	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
 	MC_Set_Speed_Ramp(15.0f);
 
 	// 初始化状态

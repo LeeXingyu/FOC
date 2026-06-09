@@ -73,6 +73,7 @@ extern volatile uint8_t g_mc_high_freq_busy;
 extern volatile uint8_t g_mc_medium_freq_busy;
 extern volatile uint32_t g_rtos_task_create_fail_mask;
 extern volatile uint8_t g_mc_calib_go_run_after_finish;
+extern volatile uint8_t g_mc_calib_done_once;
 
 
 #define BOARD_ENCODER_TYPE_KTH7824   0U

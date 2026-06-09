@@ -262,3 +262,12 @@ void Sensor_Update(void)
 void Sensor_Update_PLL(void)
 {
 }
+
+void SpeedPos_ResetEstimator(void)
+{
+    uint32_t rawNative = Get_Angle_RawNative();
+
+    g_axis.fbdk.fSpeedKalman = 0.0f;
+    SpeedPos_ResetCircleHistory(rawNative);
+    SpeedPos_ResetSpeedHistory(rawNative);
+}
