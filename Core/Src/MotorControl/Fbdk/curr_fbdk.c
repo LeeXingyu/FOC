@@ -290,9 +290,9 @@ void TIMxInit( TIM_TypeDef * TIMx)
 void Get_Vbus_Measurements(PWMC_Handle_t * pHandle, fixp30_t* pBusVoltage)
 {
 	uint16_t uAdcVbusValue = LL_ADC_INJ_ReadConversionData12(ADC1, LL_ADC_INJ_RANK_4) >> 4;
-	uint16_t uAdcVbus_VSENB = LL_ADC_INJ_ReadConversionData12(ADC2, LL_ADC_INJ_RANK_1) >> 4;
-	uint16_t uAdcVbus_VSENC = LL_ADC_INJ_ReadConversionData12(ADC2, LL_ADC_INJ_RANK_2) >> 4;
-	uint16_t uAdcVbus_VSENA = LL_ADC_INJ_ReadConversionData12(ADC2, LL_ADC_INJ_RANK_3) >> 4;
+	// uint16_t uAdcVbus_VSENB = LL_ADC_INJ_ReadConversionData12(ADC2, LL_ADC_INJ_RANK_1) >> 4;
+	// uint16_t uAdcVbus_VSENC = LL_ADC_INJ_ReadConversionData12(ADC2, LL_ADC_INJ_RANK_2) >> 4;
+	// uint16_t uAdcVbus_VSENA = LL_ADC_INJ_ReadConversionData12(ADC2, LL_ADC_INJ_RANK_3) >> 4;
 	// 根据电路分析
 	float fVbus = (float)uAdcVbusValue * 3.3f / 4096.0f / 5.1f * (5.1f + 100.0f);
 	*pBusVoltage = FIXP30(fVbus / (float)VOLTAGE_SCALE);

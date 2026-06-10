@@ -12,6 +12,7 @@ static ParamIdState_t s_param_state_prev = PARAM_ID_STATE_IDLE;
 #define CAN_CMD_SPEED_ABS_LIMIT_RPM  1000.0f
 #define CAN_CMD_GAIN_MAX             1000.0f
 #define CAN_TX_WAIT_TIMEOUT_MS       5U
+#define CAN_SPI_TRANSFER_TIMEOUT_MS   2U
 
 typedef enum
 {
@@ -511,12 +512,12 @@ static CanCmdStatus_t Can_DispatchBySid(uint16_t sid, const uint8_t *data, uint8
 }
 
 HAL_StatusTypeDef DRV_SPI_TransferData(uint8_t spiDeviceIndex, uint8_t *SpiTxData,
-		uint8_t *SpiRxData, uint16_t spiTransferSize)
+	uint8_t *SpiRxData, uint16_t spiTransferSize)
 {
 	HAL_StatusTypeDef status;
     (void)spiDeviceIndex;
 	HAL_GPIO_WritePin(COMM_CS_N_GPIO_Port, COMM_CS_N_Pin, GPIO_PIN_RESET);
-	status = HAL_SPI_TransmitReceive(&hspi2, SpiTxData, SpiRxData, spiTransferSize, 1000);
+	status = HAL_SPI_TransmitReceive(&hspi2, SpiTxData, SpiRxData, spiTransferSize, CAN_SPI_TRANSFER_TIMEOUT_MS);
 	HAL_GPIO_WritePin(COMM_CS_N_GPIO_Port, COMM_CS_N_Pin, GPIO_PIN_SET);
 	return status;
 }
@@ -650,9 +651,6 @@ void MCP2518FD_ProcessRxIrq(void)
 void MCP2518FD_Service1ms(void)
 {
     ParamIdState_t stateNow;
-
-    /* Poll RX FIFO as a safety net in case the interrupt edge is missed. */
-    MCP2518FD_ReceiveMessage(DRV_CANFDSPI_INDEX_0, APP_CAN_RX_FETCH_BYTES);
 
     stateNow = MC_Calib_GetParamState();
     if (stateNow != s_param_state_prev)

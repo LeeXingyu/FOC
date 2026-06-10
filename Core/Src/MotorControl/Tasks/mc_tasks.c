@@ -20,7 +20,6 @@ static uint16_t FOC_Controller(void);
 static void Param_Calib_Handle(void);
 static void Param_Calib_SampleFeedback(void);
 static void Param_Calib_ApplyDuty(void);
-
 /**
  * @brief  高频任务（tim1定时器触发16khz+）
  */
@@ -29,7 +28,7 @@ void High_Frequency_Task(void)
     // 异步读取两个编码器（SPI1 + SPI3）
     (void)Start_Encoder_Read(ENC_ID_MOTOR);
     //(void)Start_Encoder_Read(ENC_ID_LOAD);
-
+    Get_Vbus_Measurements(g_axis.pPWMCHandle, &g_axis.busVoltage);
     uint16_t uFOCreturn;
 
 	#ifdef ADC_INJ_TEST
@@ -63,7 +62,7 @@ void High_Frequency_Task(void)
             case AXIS_STATE_FAULT_NOW:
             case AXIS_STATE_FAULT_OVER:
                 SwitchOff_PWM(g_axis.pPWMCHandle);
-				DRV8353_UpdateFaultStatus();
+				//DRV8353_UpdateFaultStatus();
                 break;
 
             default:
@@ -111,9 +110,8 @@ void StartHighFrequencyTask(void *argument)
         {
             g_mc_high_freq_busy = 1U;
             High_Frequency_Task();
-           
+            g_mc_high_freq_busy = 0U;
         }
-		g_mc_high_freq_busy = 0U;
     }
 }
 
@@ -136,8 +134,8 @@ void StartMediumFrequencyTask(void *argument)
         {
             g_mc_medium_freq_busy = 1U;
             Medium_Frequency_Task();            
+            g_mc_medium_freq_busy = 0U;
         }
-		g_mc_medium_freq_busy = 0U;
     }
 }
 
@@ -236,7 +234,7 @@ void Idle_Handle()
 	PIDREGDQX_CURRENT_setUiQ_pu(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(0.0f));
 	PIDREG_SPEED_setUi_pu(&g_axis.speedCtrl.PIDSpeed, FIXP30(0.0f));
 
-	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
+//	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
 }
 
 /**

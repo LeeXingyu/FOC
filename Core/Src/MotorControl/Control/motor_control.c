@@ -16,9 +16,6 @@
 #include "param_identify.h"
 #include "encoder.h"
 
-extern TIM_HandleTypeDef htim1;
-extern TIM_HandleTypeDef htim3;
-
 CurrentFilter_t iqFilter;
 volatile int32_t g_dbg_q_vector_sign = 0;
 volatile uint8_t g_dbg_dir_consistent = 0U;
@@ -78,8 +75,6 @@ void Motor_Control_Init(void)
 	// 电流、电压采样初始化（定时器、采样配置）
 	Sampling_Init();
 	Init_Encoder();
-	HAL_TIM_Base_Start_IT(&htim1);
-	HAL_TIM_Base_Start_IT(&htim3);
 	// 卡尔曼滤波初始化
 	Kalman_Filter_Init(&g_motorSpeedKalmanFilter, KF_R, KF_Q);
 	//MC_Calib_Init();
@@ -133,7 +128,7 @@ uint16_t FOC_Control(void)
 	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
 
 	// 获取母线电压
-	Get_Vbus_Measurements(g_axis.pPWMCHandle, &g_axis.busVoltage);
+	//Get_Vbus_Measurements(g_axis.pPWMCHandle, &g_axis.busVoltage);
 	//Get_Speed(&g_axis.speedCtrl.speedMeas_pu);
 #if SPEED_MEAS_INVERT
 	g_axis.speedCtrl.speedMeas_pu = -g_axis.speedCtrl.speedMeas_pu;
@@ -188,8 +183,7 @@ void Curr_Control(CurrCtrl_t *pCurrCtrl, CurrCtrlInput_t* pCurrCtrlInput)
 
 	// 电气角度
 	fixp30_t anglePark_pu;
-	Get_Angle(&anglePark_pu);
-
+    Get_Angle(&anglePark_pu);
 	// 获取测量角度的余弦、正弦值
 	FIXP_CosSin_t cossinPark;
 	FIXP30_CosSinPU(anglePark_pu, &cossinPark);

@@ -75,6 +75,8 @@ extern volatile uint32_t g_rtos_task_create_fail_mask;
 extern volatile uint8_t g_mc_calib_go_run_after_finish;
 extern volatile uint8_t g_mc_calib_done_once;
 
+#define COMM_TASK_RX_FLAG  (1UL << 0)
+
 
 #define BOARD_ENCODER_TYPE_KTH7824   0U
 #define BOARD_ENCODER_TYPE_AS5047P   1U

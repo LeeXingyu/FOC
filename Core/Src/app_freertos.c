@@ -31,10 +31,10 @@
 #include "tim.h"
 #include "motor_parameters.h"
 #include "tem_task.h"
+#include "MotorControl/Tasks/mc_tasks.h"
 #include "canopen.h"
 #include "ethercat.h"
 #include "Communication/mcp2518fd/can_telemetry.h"
-#include "MotorControl/Tasks/mc_tasks.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -61,10 +61,21 @@ volatile uint8_t g_mc_high_freq_busy = 0U;
 volatile uint8_t g_mc_medium_freq_busy = 0U;
 volatile uint32_t g_rtos_task_create_fail_mask = 0U;
 
-osThreadId_t mcHighFreqTaskHandle = NULL;
-osThreadId_t mcMediumFreqTaskHandle = NULL;
-
 /* USER CODE END Variables */
+/* Definitions for mcHighFreqTask */
+osThreadId_t mcHighFreqTaskHandle;
+const osThreadAttr_t mcHighFreqTask_attributes = {
+  .name = "mcHighFreqTask",
+  .priority = (osPriority_t) osPriorityHigh,
+  .stack_size = 1024 * 4
+};
+/* Definitions for mcMediumFreqTask */
+osThreadId_t mcMediumFreqTaskHandle;
+const osThreadAttr_t mcMediumFreqTask_attributes = {
+  .name = "mcMediumFreqTask",
+  .priority = (osPriority_t) osPriorityAboveNormal,
+  .stack_size = 512 * 4
+};
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
@@ -76,25 +87,13 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t Comm_TaskHandle;
 const osThreadAttr_t Comm_Task_attributes = {
   .name = "Comm_Task",
-  .priority = (osPriority_t) osPriorityAboveNormal,
-  .stack_size = 128 * 4
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 512 * 4
 };
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 static void RTOS_MarkTaskCreateFailure(uint32_t bit);
-
-const osThreadAttr_t mcHighFreqTask_attributes = {
-  .name = "mcHighFreqTask",
-  .priority = (osPriority_t) osPriorityAboveNormal,
-  .stack_size = 512 * 4
-};
-
-const osThreadAttr_t mcMediumFreqTask_attributes = {
-  .name = "mcMediumFreqTask",
-  .priority = (osPriority_t) osPriorityAboveNormal,
-  .stack_size = 256 * 4
-};
 
 osThreadId_t temTaskHandle;
 const osThreadAttr_t temTask_attributes = {
@@ -161,7 +160,6 @@ void MX_FREERTOS_Init(void) {
   {
     RTOS_MarkTaskCreateFailure(1UL << 2);
   }
-  /* creation of control tasks */
   mcHighFreqTaskHandle = osThreadNew(StartHighFrequencyTask, NULL, &mcHighFreqTask_attributes);
   if (mcHighFreqTaskHandle == NULL)
   {
@@ -172,12 +170,10 @@ void MX_FREERTOS_Init(void) {
   {
     RTOS_MarkTaskCreateFailure(1UL << 4);
   }
-
-
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
 
-  /* Start the control timers only after the task handles exist so IRQs can notify safely. */
+  /* Start the control timers after the control stack is initialized. */
   (void)HAL_TIM_Base_Start_IT(&htim1);
   (void)HAL_TIM_Base_Start_IT(&htim3);
 
@@ -213,14 +209,30 @@ void Communication_Task(void *argument)
 {
   /* USER CODE BEGIN Communication_Task */
   /* Infinite loop */
+  static uint8_t comm_period_div = 0U;
+
   for(;;)
   {
+    (void)osThreadFlagsWait(COMM_TASK_RX_FLAG, osFlagsWaitAny, 1U);
+
     if (g_system_comm_mode == COMM_PROTO_CAN)
     {
-      if (g_comm_int_irq_pending != 0U)
+      uint8_t drainCount = 0U;
+
+      /*
+       * MCP2518FD 的 INT 是低电平有效，尽量在一次唤醒里把 FIFO 清空，
+       * 避免只处理一帧后又把低电平留给下一轮调度。
+       */
+      while ((g_comm_int_irq_pending != 0U) ||
+             (HAL_GPIO_ReadPin(COMM_INT_GPIO_Port, COMM_INT_Pin) == GPIO_PIN_RESET))
       {
         g_comm_int_irq_pending = 0U;
         MCP2518FD_ProcessRxIrq();
+        drainCount++;
+        if (drainCount >= 4U)
+        {
+          break;
+        }
       }
 
       if (g_comm_io1_irq_pending != 0U)
@@ -233,15 +245,18 @@ void Communication_Task(void *argument)
         g_comm_io2_irq_pending = 0U;
       }
 
-      MCP2518FD_Service1ms();
-      CAN_Telemetry_Service1ms();
+      comm_period_div++;
+      if (comm_period_div >= 5U)
+      {
+        comm_period_div = 0U;
+        //MCP2518FD_Service1ms();
+        //CAN_Telemetry_Service1ms();
+      }
     }
     else if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
     {
       LAN9253_Process();
     }
-
-    osDelay(1);
   }
   /* USER CODE END Communication_Task */
 }

@@ -38,6 +38,8 @@
 #include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
+extern osThreadId_t Comm_TaskHandle;
+
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
@@ -138,6 +140,7 @@ int main(void)
     HAL_Delay(1000);
     CANFD_INIT();
     CAN_Telemetry_Init();
+   // MCP2518FD_Service1ms();
   }
   else if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
   {
@@ -297,6 +300,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
   if (GPIO_Pin == COMM_INT_Pin)
   {
     g_comm_int_irq_pending = 1U;
+    if (Comm_TaskHandle != NULL)
+    {
+      (void)osThreadFlagsSet(Comm_TaskHandle, COMM_TASK_RX_FLAG);
+    }
     return;
   }
 }
