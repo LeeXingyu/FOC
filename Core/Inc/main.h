@@ -61,7 +61,8 @@ extern uint16_t g_adc2_rule_dma_buf[4];
 typedef enum {
     COMM_PROTO_ETHERCAT = 0,  //  ADC ID 0
     COMM_PROTO_CAN = 1,       //  ADC ID 1
-    COMM_PROTO_UNKNOWN = 2    // 
+    COMM_PROTO_CDC = 2,       // USB CDC debug
+    COMM_PROTO_UNKNOWN = 3    // 
 } Comm_Protocol_t;
 
 
@@ -195,6 +196,9 @@ void Error_Handler(void);
 #define DRV_INLA_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
+#ifndef APP_COMM_USE_CDC_ONLY
+#define APP_COMM_USE_CDC_ONLY        1U
+#endif
 void ADC_Rule_Collect(ADC_HandleTypeDef* hadc, ADC_Rule_Data_t* data);
 /* USER CODE END Private defines */
 

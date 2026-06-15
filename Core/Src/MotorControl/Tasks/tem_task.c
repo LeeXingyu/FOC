@@ -4,6 +4,12 @@
 #include "cmsis_os.h"
 #include "main.h"
 #include "can_telemetry.h"
+#include "Communication/cdc_debug.h"
+#include "MotorControl/Core/mc_type.h"
+#include "MotorControl/Fbdk/encoder.h"
+#include "MotorControl/Fbdk/speed_pos_fbdk.h"
+#include "MotorControl/Tasks/mc_tasks.h"
+#include "motor_parameters.h"
 #include <math.h>
 
 extern ADC_HandleTypeDef hadc2;
@@ -76,6 +82,10 @@ void Tem_Task(void *argument)
   (void)argument;
 
   uint8_t comm_id_locked = 0U;
+  static float s_angle_cont_deg = 0.0f;
+  static float s_prev_angle_deg = 0.0f;
+  static uint8_t s_prev_angle_valid = 0U;
+  static float s_mech_angle_deg = 0.0f;
 
   for (;;)
   {
@@ -85,12 +95,74 @@ void Tem_Task(void *argument)
     g_adc_Rule_ID_Tem.temp_TSENC_c = ADC_ThermistorToCelsius_Q24(g_adc_Rule_ID_Tem.raw_TSENC);
     CAN_Telemetry_UpdateFromAdc(&g_adc_Rule_ID_Tem);
 
+    CDC_DebugTelemetry_t telem = {0};
+    telem.axis_state = (uint8_t)g_axis.state;
+    telem.axis_error = (uint8_t)g_axis.error;
+    telem.control_mode = (uint8_t)g_axis.enCtrlMode;
+    telem.param_state = (uint8_t)MC_Calib_GetParamState();
+    telem.position_deg = Get_Encoder_AngleDeg(ENC_ID_MOTOR);
+    if (s_prev_angle_valid == 0U)
+    {
+      s_prev_angle_deg = telem.position_deg;
+      s_prev_angle_valid = 1U;
+    }
+    else
+    {
+      float delta = telem.position_deg - s_prev_angle_deg;
+      if (delta > 180.0f)
+      {
+        delta -= 360.0f;
+      }
+      else if (delta < -180.0f)
+      {
+        delta += 360.0f;
+      }
+      s_angle_cont_deg += delta;
+      s_prev_angle_deg = telem.position_deg;
+    }
+    telem.position_cont_deg = s_angle_cont_deg;
+
+    {
+      uint32_t counts = Get_Angle_CountNative();
+      uint32_t raw = Get_Angle_RawNative();
+      uint32_t offset = g_axis.posCtrl.uOffsetAngleRawNative;
+      if (g_axis.posCtrl.bCalibFlag && (counts > 0U))
+      {
+        uint32_t delta = (raw >= offset) ? (raw - offset) : (raw + counts - offset);
+        s_mech_angle_deg = ((float)delta * 360.0f) / (float)counts;
+      }
+      else
+      {
+        s_mech_angle_deg = 0.0f;
+      }
+      telem.position_mech_deg = s_mech_angle_deg;
+    }
+
+    {
+      fixp30_t angle_app_pu = FIXP30(0.0f);
+
+      Get_Angle(&angle_app_pu);
+      telem.position_app_deg = FIXP30_toF(angle_app_pu) * 360.0f;
+    }
+    telem.speed_rpm = FIXP30_toF(g_axis.speedCtrl.speedMeas_pu) * FREQUENCY_SCALE;
+    telem.current_d_a = FIXP30_toF(g_axis.currCtrl.calcIdq.D) * CURRENT_SCALE;
+    telem.current_q_a = FIXP30_toF(g_axis.currCtrl.calcIdq.Q) * CURRENT_SCALE;
+    telem.current_ref_q_a = FIXP30_toF(g_axis.currCtrl.refIdq.Q) * CURRENT_SCALE;
+    CDC_Debug_SetTelemetry(&telem);
+
     if (comm_id_locked == 0U)
     {
-      g_system_comm_mode = (g_adc_Rule_ID_Tem.raw_COMM_ID == 1U) ? COMM_PROTO_CAN : COMM_PROTO_ETHERCAT;
+      if (g_system_comm_mode == COMM_PROTO_CDC)
+      {
+        /* keep CDC-only mode */
+      }
+      else
+      {
+        g_system_comm_mode = (g_adc_Rule_ID_Tem.raw_COMM_ID == 1U) ? COMM_PROTO_CAN : COMM_PROTO_ETHERCAT;
+      }
       comm_id_locked = 1U;
     }
 
-    osDelay(3000);
+    osDelay(20);
   }
 }

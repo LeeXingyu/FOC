@@ -35,6 +35,8 @@
 #include "canopen.h"
 #include "ethercat.h"
 #include "Communication/mcp2518fd/can_telemetry.h"
+#include "Communication/cdc_debug.h"
+#include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -91,6 +93,13 @@ const osThreadAttr_t Comm_Task_attributes = {
   .stack_size = 512 * 4
 };
 
+osThreadId_t CDC_TaskHandle;
+const osThreadAttr_t CDC_Task_attributes = {
+  .name = "CDC_Task",
+  .priority = (osPriority_t) osPriorityNormal,
+  .stack_size = 512 * 4
+};
+
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN FunctionPrototypes */
 static void RTOS_MarkTaskCreateFailure(uint32_t bit);
@@ -105,6 +114,7 @@ const osThreadAttr_t temTask_attributes = {
 
 void StartDefaultTask(void *argument);
 void Communication_Task(void *argument);
+void CDC_Communication_Task(void *argument);
 
 static void RTOS_MarkTaskCreateFailure(uint32_t bit)
 {
@@ -149,12 +159,20 @@ void MX_FREERTOS_Init(void) {
   {
     RTOS_MarkTaskCreateFailure(1UL << 0);
   }
-  /* creation of Comm_Task */
+  /* creation of Comm_Task / CDC_Task */
+#if defined(APP_COMM_USE_CDC_ONLY) && (APP_COMM_USE_CDC_ONLY != 0)
+  CDC_TaskHandle = osThreadNew(CDC_Communication_Task, NULL, &CDC_Task_attributes);
+  if (CDC_TaskHandle == NULL)
+  {
+    RTOS_MarkTaskCreateFailure(1UL << 1);
+  }
+#else
   Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
   if (Comm_TaskHandle == NULL)
   {
     RTOS_MarkTaskCreateFailure(1UL << 1);
   }
+#endif
   temTaskHandle = osThreadNew(Tem_Task, NULL, &temTask_attributes);
   if (temTaskHandle == NULL)
   {
@@ -259,6 +277,17 @@ void Communication_Task(void *argument)
     }
   }
   /* USER CODE END Communication_Task */
+}
+
+void CDC_Communication_Task(void *argument)
+{
+  (void)argument;
+
+  for (;;)
+  {
+    CDC_Debug_TaskHook();
+    osDelay(1);
+  }
 }
 
 /* Private application code --------------------------------------------------*/

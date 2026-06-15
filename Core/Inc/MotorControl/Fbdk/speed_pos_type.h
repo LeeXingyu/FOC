@@ -5,11 +5,9 @@
 
 typedef struct
 {
-    uint16_t uAngleRaw;
     uint32_t uAngleRawNative;
     float fAngle;
     float fOffsetAngle;
-    uint16_t uOffsetAngleRaw;
     uint32_t uOffsetAngleRawNative;
     float fSpeed;
     float fSpeedPll;

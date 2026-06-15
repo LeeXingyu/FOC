@@ -35,6 +35,7 @@
 #include "motor_parameters.h"
 #include "Communication/ethercat.h"
 #include "Communication/mcp2518fd/can_telemetry.h"
+#include "Communication/cdc_debug.h"
 #include "usbd_cdc_if.h"
 /* USER CODE END Includes */
 
@@ -125,6 +126,7 @@ int main(void)
   HAL_Delay(30);
   SPI2_SwitchDevice(SPI2_DEV_DRV8353);
   MX_USB_Device_Init();
+  CDC_Debug_Init();
   //HAL_Delay(1000);
   //CDC_Transmit_FS ((uint8_t *)"Hello\r",6);
   Motor_Control_Init();
@@ -134,6 +136,9 @@ int main(void)
   //status = DRV8353_SelfTest(&ctrl, &csa);
   ADC_Rule_Collect(&hadc2, &g_adc_Rule_ID_Tem);
   DRV8353_CS_HIGH();
+#if defined(APP_COMM_USE_CDC_ONLY) && (APP_COMM_USE_CDC_ONLY != 0)
+  g_system_comm_mode = COMM_PROTO_CDC;
+#else
   if (g_system_comm_mode == COMM_PROTO_CAN)
   {
     SPI2_SwitchDevice(SPI2_DEV_MCP2518FD);
@@ -148,6 +153,7 @@ int main(void)
     HAL_Delay(1000);
     LAN9253_Init();
   }
+#endif
   
   /* USER CODE END 2 */
 

@@ -42,12 +42,10 @@ typedef enum
 
 void Init_Encoder(void);
 HAL_StatusTypeDef Start_Encoder_Read(EncoderId_t id);
-uint16_t Get_Encoder_Raw(EncoderId_t id);
 uint32_t Get_Encoder_RawNative(EncoderId_t id);
 uint32_t Get_Encoder_NativeCount(EncoderId_t id);
 EncoderType_t Get_Encoder_Type(EncoderId_t id);
 float Get_Encoder_AngleDeg(EncoderId_t id);
-uint16_t Get_Encoder_RawCompat(EncoderId_t id);
 void Encoder_SpiDmaCpltCallback(SPI_HandleTypeDef *hspi);
 
 #endif /* INC_MOTORCONTROL_FBDK_ENCODER_H_ */

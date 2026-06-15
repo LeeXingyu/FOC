@@ -42,9 +42,9 @@ void Get_Angle(fixp30_t *pAngle);
   * @brief  获取编码器角度原始值
   *
  */
-uint16_t Get_Angle_Raw();
 uint32_t Get_Angle_RawNative();
 uint32_t Get_Angle_CountNative();
+float Get_Angle_Deg(void);
 
 /**
  * @brief  M法测速+低通滤波

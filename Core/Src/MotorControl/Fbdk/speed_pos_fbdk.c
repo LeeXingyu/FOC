@@ -20,7 +20,13 @@ static uint32_t SpeedPos_GetNativeCounts(void)
 {
     return Get_Angle_CountNative();
 }
-
+/***
+ * @brief Get the signed delta between two encoder counts.
+ * @param cur: The current encoder count.
+ *        prev: The previous encoder count.
+ *        counts: The number of encoder counts in a circle.
+ * @return int32_t The signed delta between two encoder counts.
+ */
 static int32_t SpeedPos_SignedDelta(uint32_t cur, uint32_t prev, uint32_t counts)
 {
     uint32_t direct;
@@ -37,10 +43,13 @@ static int32_t SpeedPos_SignedDelta(uint32_t cur, uint32_t prev, uint32_t counts
         wrap = counts - direct;
         return (direct <= wrap) ? (int32_t)direct : -(int32_t)wrap;
     }
-
-    direct = prev - cur;
-    wrap = counts - direct;
-    return (direct <= wrap) ? -(int32_t)direct : (int32_t)wrap;
+    else
+    {
+        direct = prev - cur;
+        wrap = counts - direct;
+        return (direct <= wrap) ? -(int32_t)direct : (int32_t)wrap;
+    }
+    return 0;
 }
 
 static int64_t SpeedPos_FloorDiv(int64_t numerator, int64_t denominator)
@@ -62,7 +71,9 @@ static int64_t SpeedPos_FloorDiv(int64_t numerator, int64_t denominator)
 
     return q;
 }
-
+/***
+ * @brief Reset the circle history.
+ */
 static void SpeedPos_ResetCircleHistory(uint32_t rawNative)
 {
     s_absEncoderNative = (int64_t)rawNative;
@@ -75,7 +86,11 @@ static void SpeedPos_ResetSpeedHistory(uint32_t rawNative)
     s_prevSpeedRawNative = rawNative;
     s_speedHistoryValid = true;
 }
-
+/****
+ * 
+ * @brief Cicle update function. Should be called at the same rate as the encoder update, and before any function that relies on g_axis.fbdk.uCircle.
+ * 
+ */
 void Circle_Update(void)
 {
     uint32_t counts;
@@ -157,7 +172,10 @@ void Sensor_Update_Kalman(void)
     g_axis.fbdk.fSpeedKalman = Kalman_Filter_Calc(&g_motorSpeedKalmanFilter, speedRpmRaw);
     s_prevSpeedRawNative = curRawNative;
 }
-
+/***   
+ * @brief Calculate the speed and update the circle history.
+ * 
+ */
 void Calc_Speed(fixp30_t *pSpeed)
 {
     uint32_t rawNative;
@@ -199,6 +217,11 @@ void Get_Speed(fixp30_t *pSpeed)
     *pSpeed = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
 }
 
+
+/**
+ * @brief 获取电机编码器原始计数值
+ * @return
+ */
 void Get_Angle(fixp30_t *pAngle)
 {
     uint32_t curRaw;
@@ -240,16 +263,18 @@ void Get_Angle(fixp30_t *pAngle)
     *pAngle = FIXP30(fmodf(fMechAngle, 1.0f));
 }
 
-uint16_t Get_Angle_Raw(void)
-{
-    return g_axis.fbdk.uAngleRaw;
-}
-
+/**
+ * @brief 获取电机编码器原始计数值
+ * @return uint32_t 编码器原始计数值
+ */
 uint32_t Get_Angle_RawNative(void)
 {
     return Get_Encoder_RawNative(ENC_ID_MOTOR);
 }
-
+/**
+ * @brief 获取当前编码器的原始计数总数 (一圈的总数)
+ * @return different encoder maps to different counts, for example, AS5047P has 16384 counts
+ */
 uint32_t Get_Angle_CountNative(void)
 {
     return Get_Encoder_NativeCount(ENC_ID_MOTOR);

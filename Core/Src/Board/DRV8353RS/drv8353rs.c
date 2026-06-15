@@ -34,7 +34,7 @@ void DRV8353RS_Init(void)
     drvConfig.drvCsaObj.csaObj.CSA_CAL_B  = 0b00;
     drvConfig.drvCsaObj.csaObj.CSA_CAL_A  = 0b00;
     drvConfig.drvCsaObj.csaObj.DIS_SEN    = 0b00;
-    drvConfig.drvCsaObj.csaObj.CSA_GAIN   = 0b01; //10 GAIN  对应 AMPLIFICATION_GAIN
+    drvConfig.drvCsaObj.csaObj.CSA_GAIN   = 0b11; //10 GAIN  对应 AMPLIFICATION_GAIN
     //drvConfig.drvCsaObj.csaObj.CSA_GAIN   = 0b11;
     drvConfig.drvCsaObj.csaObj.LS_REF     = 0b00;
     drvConfig.drvCsaObj.csaObj.VREF_DIV   = 0b01;

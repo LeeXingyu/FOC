@@ -48,6 +48,9 @@ void PID_All_Init()
 			FREQUENCY_SCALE,
 			fDutyLimit);
 
+	//PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.15f);
+	//PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 20.0f);
+	//
 	PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.15f);
 	PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 20.0f);
 	PIDREGDQX_CURRENT_setOutputLimitsD(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(fDutyLimit * 0.95f), FIXP30(-fDutyLimit * 0.95f));
@@ -58,8 +61,8 @@ void PID_All_Init()
 	PIDREG_SPEED_init(&g_axis.speedCtrl.PIDSpeed, CURRENT_SCALE, FREQUENCY_SCALE, SPEED_CONTROL_RATE);
 	PIDREG_SPEED_setOutputLimits(&g_axis.speedCtrl.PIDSpeed, currentLimit_pu, -currentLimit_pu);
 
-	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 1.0f);
-	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 4.0f);
+	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 0.2f);
+	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 0.4f);
 }
 
 /**
@@ -91,7 +94,6 @@ void Motor_Control_Init(void)
 	g_axis.pPWMCHandle->uCalibCount = 0;
 
 	// 位置相关
-	g_axis.posCtrl.uOffsetAngleRaw = 0;
 	g_axis.posCtrl.uOffsetAngleRawNative = 0U;
 	g_axis.posCtrl.uCalibCount = 0;
 	g_axis.posCtrl.bCalibFlag = false;
@@ -109,7 +111,7 @@ void Motor_Control_Init(void)
 	g_axis.speedCtrl.speedRef_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
-	MC_Set_Speed_Ramp(15.0f);
+	MC_Set_Speed_Ramp(100.0f);
 
 	// 初始化状态
 	g_axis.state = AXIS_STATE_IDLE;
@@ -152,8 +154,9 @@ uint16_t FOC_Control(void)
 	iSpeedCount++;
 	if (iSpeedCount == SPEED_CONTROL_COUNT)
 	{
-		Speed_Control(&g_axis.speedCtrl, g_axis.enCtrlMode);
-		g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
+		 Speed_Control(&g_axis.speedCtrl, g_axis.enCtrlMode);
+		 g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
+		//g_axis.currCtrl.refIdq.Q = FIXP30(0.05f);   // 你想要的固定力矩电流
 		iSpeedCount = 0;
 	}
 
@@ -287,7 +290,7 @@ void Open_Loop_Control()
 	//SwitchOn_PWM(g_axis.pPWMCHandle);
 
 	// 电气角度
-	fixp30_t anglePark_pu;
+	fixp30_t anglePark_pu = g_axis.posCtrl.openLoopAngle_pu;
 
 	// 获取三相电流
 	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
@@ -308,8 +311,8 @@ void Open_Loop_Control()
 	Update_Open_Loop_Angle(&g_axis.posCtrl, g_axis.speedCtrl.speedRef_pu);
 
 	// 获取电气角度
-//	anglePark_pu = g_axis.posCtrl.openLoopAngle_pu;
-	Get_Angle(&anglePark_pu);
+	// 开环时使用自增角度，避免未初始化角度导致飞车
+	// Get_Angle(&anglePark_pu);
 
 	// 获取测量角度的余弦、正弦值
 	FIXP_CosSin_t cossinPwm;

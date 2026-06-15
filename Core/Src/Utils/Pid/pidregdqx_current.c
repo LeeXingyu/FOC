@@ -106,7 +106,8 @@ void PIDREGDQX_CURRENT_init(
 	pHandle->MaxQ = FIXP24(0.7f);
 	pHandle->MinQ = FIXP24(-0.7f);
 	pHandle->UpQ = FIXP24(0.0f);
-	pHandle->UiD = FIXP24(0.0f);
+	//pHandle->UiD = FIXP24(0.0f);
+  pHandle->UiQ = FIXP24(0.0f);
 	pHandle->compensation = FIXP24(1.0f);
 
 	pHandle->current_scale = current_scale;

@@ -17,7 +17,6 @@ typedef struct
     uint8_t timeout_count;
     volatile EncoderSpiState_t state;
     uint32_t start_tick;
-    volatile uint16_t raw_compat;
     volatile uint32_t raw_native;
     volatile float angle_deg;
     AS5047P_Handle_t as5047p;
@@ -33,7 +32,6 @@ static EncoderDev_t s_enc[ENC_ID_MAX] =
         .cs_pin = CODER_CS_N2_Pin,
         .type = MOTOR_ENCODER_TYPE,
         .state = ENC_SPI_IDLE,
-        .raw_compat = 0U,
         .raw_native = 0U,
         .angle_deg = 0.0f,
         .as5047p = {
@@ -62,7 +60,6 @@ static EncoderDev_t s_enc[ENC_ID_MAX] =
         .cs_pin = CODER_CS_N1_Pin,
         .type = LOAD_ENCODER_TYPE,
         .state = ENC_SPI_IDLE,
-        .raw_compat = 0U,
         .raw_native = 0U,
         .angle_deg = 0.0f,
         .as5047p = {
@@ -104,17 +101,6 @@ static uint32_t Encoder_CountFromType(EncoderType_t type)
         default:
             return KTH7824_ANGLE_COUNTS;
     }
-}
-
-static uint16_t Encoder_NormalizeToCompat16(uint32_t raw_native, uint32_t native_counts)
-{
-    if (native_counts <= 1U)
-    {
-        return 0U;
-    }
-
-    raw_native %= native_counts;
-    return (uint16_t)(((uint64_t)raw_native * 65535ULL) / (uint64_t)(native_counts - 1U));
 }
 
 static uint32_t Encoder_ApplyDirection(EncoderId_t id, uint32_t raw_native, uint32_t native_counts)
@@ -204,11 +190,6 @@ static HAL_StatusTypeDef Encoder_CompleteRead(EncoderDev_t *pdev, SPI_HandleType
     }
 }
 
-static void Encoder_UpdateCompatFeedback(EncoderDev_t *pdev)
-{
-    pdev->raw_compat = Encoder_NormalizeToCompat16(pdev->raw_native, Encoder_CountFromType(pdev->type));
-}
-
 static void Encoder_DisableDevice(EncoderDev_t *pdev)
 {
     if (pdev == NULL)
@@ -281,13 +262,11 @@ void Init_Encoder(void)
     uint8_t i;
 
     g_axis.fbdk.fAngle = 0.0f;
-    g_axis.fbdk.uAngleRaw = 0U;
     g_axis.fbdk.uAngleRawNative = 0U;
     g_axis.fbdk.fSpeed = 0.0f;
     g_axis.fbdk.fSpeedKalman = 0.0f;
     g_axis.fbdk.fSpeedPll = 0.0f;
     g_axis.fbdk.fOffsetAngle = 0.0f;
-    g_axis.fbdk.uOffsetAngleRaw = 0U;
     g_axis.fbdk.uOffsetAngleRawNative = 0U;
 
     for (i = 0U; i < ENC_ID_MAX; i++)
@@ -297,7 +276,6 @@ void Init_Encoder(void)
         s_enc[i].timeout_count = 0U;
         s_enc[i].state = ENC_SPI_IDLE;
         s_enc[i].start_tick = 0U;
-        s_enc[i].raw_compat = 0U;
         s_enc[i].raw_native = 0U;
         s_enc[i].angle_deg = 0.0f;
         if (Encoder_InitDevice(&s_enc[i]) != HAL_OK)
@@ -345,21 +323,10 @@ HAL_StatusTypeDef Start_Encoder_Read(EncoderId_t id)
     return ret;
 }
 
-uint16_t Get_Encoder_Raw(EncoderId_t id)
-{
-    if (id >= ENC_ID_MAX)
-    {
-        return 0U;
-    }
-
-    return s_enc[id].raw_compat;
-}
-
-uint16_t Get_Encoder_RawCompat(EncoderId_t id)
-{
-    return Get_Encoder_Raw(id);
-}
-
+/**
+ * @brief 获取编码器回调里更新的原始单圈机械角
+ * @return uint32_t 原始单圈机械角，单位为计数
+ */
 uint32_t Get_Encoder_RawNative(EncoderId_t id)
 {
     if (id >= ENC_ID_MAX)
@@ -390,6 +357,10 @@ EncoderType_t Get_Encoder_Type(EncoderId_t id)
     return s_enc[id].type;
 }
 
+/**
+ * @brief 获取编码器回调里更新的原始单圈机械角
+ * @return float 原始单圈机械角，单位为度
+ */
 float Get_Encoder_AngleDeg(EncoderId_t id)
 {
     if (id >= ENC_ID_MAX)
@@ -415,11 +386,8 @@ void Encoder_SpiDmaCpltCallback(SPI_HandleTypeDef *hspi)
                 s_enc[i].raw_native = Encoder_ApplyDirection((EncoderId_t)i, s_enc[i].raw_native, native_counts);
                 s_enc[i].angle_deg = ((float)s_enc[i].raw_native * 360.0f) / (float)native_counts;
                 s_enc[i].timeout_count = 0U;
-                Encoder_UpdateCompatFeedback(&s_enc[i]);
-
                 if ((EncoderId_t)i == ENC_ID_MOTOR)
                 {
-                    g_axis.fbdk.uAngleRaw = s_enc[i].raw_compat;
                     g_axis.fbdk.uAngleRawNative = s_enc[i].raw_native;
                     g_axis.fbdk.fAngle = s_enc[i].angle_deg;
                 }

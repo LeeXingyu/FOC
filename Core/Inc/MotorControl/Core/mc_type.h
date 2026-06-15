@@ -149,7 +149,6 @@ typedef struct {
 
     uint16_t    uCalibCount;		// 校准执行次数
     bool 		bCalibFlag;			// 校准状态
-    uint16_t 	uOffsetAngleRaw;	// 校准偏移读取
     uint32_t    uOffsetAngleRawNative; // Native encoder offset raw
 
     PID_Handle_t pid;				// 位置环PID

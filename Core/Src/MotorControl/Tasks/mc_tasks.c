@@ -31,9 +31,6 @@ void High_Frequency_Task(void)
     Get_Vbus_Measurements(g_axis.pPWMCHandle, &g_axis.busVoltage);
     uint16_t uFOCreturn;
 
-	#ifdef ADC_INJ_TEST
-    ADC_Injected_TestHook();
-	#else
     // 已经初始化完毕
     if (g_axis.bMCBootCompleted)
     {
@@ -69,7 +66,6 @@ void High_Frequency_Task(void)
                 break;
         }
     }
-	#endif
 }
 
 /**
@@ -311,7 +307,6 @@ void Offset_Encoder_Handle()
 	{
 		PID_Reset(&g_axis.currCtrl.pidId, 0.0f);
 		PID_Reset(&g_axis.currCtrl.pidIq, 0.0f);
-		g_axis.posCtrl.uOffsetAngleRaw = Get_Angle_Raw();
 		g_axis.posCtrl.uOffsetAngleRawNative = Get_Angle_RawNative();
 		g_axis.posCtrl.uCalibCount = 0;
 		g_axis.posCtrl.bCalibFlag = true;

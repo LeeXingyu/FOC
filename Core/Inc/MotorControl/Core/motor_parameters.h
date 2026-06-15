@@ -21,7 +21,7 @@
 
 #define RSHUNT                              0.005f				/* 采样电阻 */
 #define ADC_REFERENCE_VOLTAGE				3.3f				/* ADC参考电压 */
-#define AMPLIFICATION_GAIN					10					/* 电流采样放大电路增益 */
+#define AMPLIFICATION_GAIN					40					/* 电流采样放大电路增益 */
 
 #define CURRENT_SCALE                       (float_t)(12) 		/* 电流归一化计算比例尺 */
 #define VOLTAGE_SCALE                       (float_t)(264) 		/* 电压归一化计算比例尺 */
@@ -39,6 +39,6 @@
 #define PWM_PERIOD_CYCLES	10624
 
 
-#define PID_MAX_CURRENT		30									/* 速度环最大电流 */
+#define PID_MAX_CURRENT		12									/* 速度环最大电流 */
 
 #endif /* INC_MOTORCONTROL_CORE_MOTOR_PARAMETERS_H_ */

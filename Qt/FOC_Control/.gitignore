@@ -1,0 +1,40 @@
+# Qt/CMake build outputs
+/build/
+/build_*/
+/cmake-build-*/
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/Makefile
+/compile_commands.json
+/install_manifest.txt
+
+# Qt Creator user files
+/.qtc_clangd/
+/.qtcreator/
+/.qmlls/
+/*.pro.user
+/*.pro.user.*
+/*.creator.user
+/*.user
+
+# Auto-generated Qt artifacts
+/*_autogen/
+/*.autosave
+
+# Windows / IDE noise
+/debug/
+/release/
+/x64/
+/x86/
+*.obj
+*.o
+*.a
+*.dll
+*.exe
+*.ilk
+*.pdb
+*.manifest
+*.stackdump
+Thumbs.db
+Desktop.ini
