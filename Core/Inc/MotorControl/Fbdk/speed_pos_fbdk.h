@@ -12,6 +12,14 @@
 #include <stdint.h>
 #include "Utils/Fixp/fixpmath.h"
 
+/*
+ * 1: 使用 angle-based speed observer
+ * 0: 回退到连续差分测速
+ */
+#ifndef SPEED_MEAS_USE_ANGLE_OBSERVER
+#define SPEED_MEAS_USE_ANGLE_OBSERVER 1
+#endif
+
 /**
  * @brief  圈数量计算
  */

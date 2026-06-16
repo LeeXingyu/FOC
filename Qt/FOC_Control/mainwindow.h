@@ -17,6 +17,7 @@ class QLineSeries;
 class QSlider;
 class QPushButton;
 class QSpinBox;
+class QToolButton;
 class QTextEdit;
 class QPlainTextEdit;
 class QTabWidget;
@@ -43,14 +44,21 @@ private:
     void setupUi();
     void setupControlPage(QWidget *page);
     void setupAnglePage(QWidget *page);
+    void setupSpeedPage(QWidget *page);
     void setupDebugPage(QWidget *page);
     void appendLog(const QString &text);
     void appendDebug(const QString &text);
     void setConnectedUi(bool connected);
     void processLine(const QString &line);
     void handleTelemetryLine(const QString &line);
-    void updateAngle(double measuredDeg, double mechDeg, double appDeg, double iqAmp);
+    void updateAngle(double mechDeg, double appDeg);
+    void updateSpeed(double speedRpm, double iqAmp, double idAmp);
     void refreshAngleChart();
+    void refreshSpeedChart();
+    void zoomAngleWindow(int delta);
+    void zoomSpeedWindow(int delta);
+    void resetAngleWindow();
+    void resetSpeedWindow();
     static bool parseKeyValueFloat(const QString &line, const QString &key, double *value);
 
     QTimer m_refreshTimer;
@@ -60,6 +68,7 @@ private:
     QTabWidget *m_tabs = nullptr;
     QWidget *m_controlPage = nullptr;
     QWidget *m_anglePage = nullptr;
+    QWidget *m_speedPage = nullptr;
     QWidget *m_debugPage = nullptr;
 
     QComboBox *m_portCombo = nullptr;
@@ -100,25 +109,53 @@ private:
     QPushButton *m_debugClearButton = nullptr;
 
     QChartView *m_angleChartView = nullptr;
-    QLineSeries *m_angleMeasuredSeries = nullptr;
     QLineSeries *m_angleMechSeries = nullptr;
     QLineSeries *m_angleAppSeries = nullptr;
-    QLineSeries *m_angleIqSeries = nullptr;
     QValueAxis *m_angleAxisX = nullptr;
     QValueAxis *m_angleAxisY = nullptr;
-    QValueAxis *m_angleAxisIq = nullptr;
     QLabel *m_statusAngle = nullptr;
     QLabel *m_statusAngleLink = nullptr;
     QLabel *m_angleDetailLabel = nullptr;
     QSlider *m_angleTimeSlider = nullptr;
+    QToolButton *m_angleZoomInButton = nullptr;
+    QToolButton *m_angleZoomOutButton = nullptr;
+    QToolButton *m_angleZoomResetButton = nullptr;
+    bool m_angleSliderDragging = false;
+
+    QChartView *m_speedChartView = nullptr;
+    QLineSeries *m_speedSeries = nullptr;
+    QLineSeries *m_speedIqSeries = nullptr;
+    QLineSeries *m_speedIdSeries = nullptr;
+    QValueAxis *m_speedAxisX = nullptr;
+    QValueAxis *m_speedAxisY = nullptr;
+    QValueAxis *m_speedAxisIq = nullptr;
+    QLabel *m_statusSpeed = nullptr;
+    QLabel *m_speedLink = nullptr;
+    QLabel *m_speedDetailLabel = nullptr;
+    QSlider *m_speedTimeSlider = nullptr;
+    QToolButton *m_speedZoomInButton = nullptr;
+    QToolButton *m_speedZoomOutButton = nullptr;
+    QToolButton *m_speedZoomResetButton = nullptr;
+    bool m_speedSliderDragging = false;
+    QVector<QPointF> m_speedPoints;
+    QVector<QPointF> m_speedIqPoints;
+    QVector<QPointF> m_speedIdPoints;
+    qint64 m_speedSampleIndex = 0;
+    int m_speedWindowSize = 1800;
+    bool m_angleAutoFollow = true;
+    bool m_speedAutoFollow = true;
+    double m_lastSpeedRpm = 0.0;
+    double m_lastIqAmp = 0.0;
+    double m_lastIdAmp = 0.0;
+    qint64 m_lastAngleUiTick = 0;
+    qint64 m_lastSpeedUiTick = 0;
+
     QLabel *m_statusLink = nullptr;
-    QVector<QPointF> m_angleMeasuredPoints;
     QVector<QPointF> m_angleMechPoints;
     QVector<QPointF> m_angleAppPoints;
-    QVector<QPointF> m_angleIqPoints;
     qint64 m_sampleIndex = 0;
     qint64 m_lastTelemetryTick = 0;
-    int m_angleWindowSize = 200;
+    int m_angleWindowSize = 1800;
     QString m_rxLineBuffer;
 };
 

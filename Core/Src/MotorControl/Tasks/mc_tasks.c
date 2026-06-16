@@ -14,7 +14,6 @@
 #include "motor_parameters.h"
 #include "encoder.h"
 #include "param_identify.h"
-#include "cmsis_os.h"
 
 static uint16_t FOC_Controller(void);
 static void Param_Calib_Handle(void);
@@ -85,54 +84,6 @@ void Medium_Frequency_Task()
 	}
 	
 	//ParamId_ModuleBackgroundService();
-}
-
-void StartHighFrequencyTask(void *argument)
-{
-    (void)argument;
-
-    for (;;)
-    {
-        uint32_t flags = osThreadFlagsWait(MC_HIGH_FREQ_TASK_FLAG,
-                                           osFlagsWaitAny,
-                                           osWaitForever);
-
-        if ((flags & osFlagsError) != 0U)
-        {
-            continue;
-        }
-
-        if ((flags & MC_HIGH_FREQ_TASK_FLAG) != 0U)
-        {
-            g_mc_high_freq_busy = 1U;
-            High_Frequency_Task();
-            g_mc_high_freq_busy = 0U;
-        }
-    }
-}
-
-void StartMediumFrequencyTask(void *argument)
-{
-    (void)argument;
-
-    for (;;)
-    {
-        uint32_t flags = osThreadFlagsWait(MC_MEDIUM_FREQ_TASK_FLAG,
-                                           osFlagsWaitAny,
-                                           osWaitForever);
-
-        if ((flags & osFlagsError) != 0U)
-        {
-            continue;
-        }
-
-        if ((flags & MC_MEDIUM_FREQ_TASK_FLAG) != 0U)
-        {
-            g_mc_medium_freq_busy = 1U;
-            Medium_Frequency_Task();            
-            g_mc_medium_freq_busy = 0U;
-        }
-    }
 }
 
 /**

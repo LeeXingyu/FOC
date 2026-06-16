@@ -70,8 +70,6 @@ extern Comm_Protocol_t g_system_comm_mode;
 extern volatile uint8_t g_comm_io1_irq_pending;
 extern volatile uint8_t g_comm_io2_irq_pending;
 extern volatile uint8_t g_comm_int_irq_pending;
-extern volatile uint8_t g_mc_high_freq_busy;
-extern volatile uint8_t g_mc_medium_freq_busy;
 extern volatile uint32_t g_rtos_task_create_fail_mask;
 extern volatile uint8_t g_mc_calib_go_run_after_finish;
 extern volatile uint8_t g_mc_calib_done_once;

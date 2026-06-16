@@ -8,7 +8,6 @@
 /* USER CODE END Header */
 
 #include "usbd_cdc_if.h"
-
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,12 +46,14 @@ typedef struct
 static CDC_RxState_t s_cdc_rx = {0};
 static CDC_TelemetryCache_t s_cdc_telem = {0};
 static uint8_t s_cdc_tx_busy = 0U;
+static char s_cdc_tx_line[CDC_TX_LINE_MAX];
 
 uint8_t UserRxBufferFS[APP_RX_DATA_SIZE];
 uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
 
 static uint8_t CDC_SendString(const char *str);
 static uint8_t CDC_SendFormat(const char *fmt, ...);
+static uint8_t CDC_SendBuffered(const char *buf, size_t len);
 static void CDC_AppendFixed6(char *dst, size_t dst_len, float value);
 static void CDC_HandleLine(const char *line);
 static void CDC_SendTelemetryLine(void);
@@ -180,17 +181,21 @@ static uint8_t CDC_SendString(const char *str)
         return USBD_FAIL;
     }
 
-    return CDC_Transmit_FS((uint8_t *)str, (uint16_t)strlen(str));
+    return CDC_SendBuffered(str, strlen(str));
 }
 
 static uint8_t CDC_SendFormat(const char *fmt, ...)
 {
-    char buf[CDC_TX_LINE_MAX];
     va_list ap;
     int n;
 
+    if ((fmt == NULL) || (s_cdc_tx_busy != 0U))
+    {
+        return USBD_BUSY;
+    }
+
     va_start(ap, fmt);
-    n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    n = vsnprintf(s_cdc_tx_line, sizeof(s_cdc_tx_line), fmt, ap);
     va_end(ap);
 
     if (n <= 0)
@@ -198,13 +203,38 @@ static uint8_t CDC_SendFormat(const char *fmt, ...)
         return USBD_FAIL;
     }
 
-    if ((size_t)n >= sizeof(buf))
+    if ((size_t)n >= sizeof(s_cdc_tx_line))
     {
-        n = (int)sizeof(buf) - 1;
-        buf[n] = '\0';
+        n = (int)sizeof(s_cdc_tx_line) - 1;
+        s_cdc_tx_line[n] = '\0';
     }
 
-    return CDC_Transmit_FS((uint8_t *)buf, (uint16_t)strlen(buf));
+    return CDC_Transmit_FS((uint8_t *)s_cdc_tx_line, (uint16_t)strlen(s_cdc_tx_line));
+}
+
+static uint8_t CDC_SendBuffered(const char *buf, size_t len)
+{
+    size_t copy_len;
+
+    if ((buf == NULL) || (len == 0U))
+    {
+        return USBD_FAIL;
+    }
+
+    if (s_cdc_tx_busy != 0U)
+    {
+        return USBD_BUSY;
+    }
+
+    copy_len = len;
+    if (copy_len >= sizeof(s_cdc_tx_line))
+    {
+        copy_len = sizeof(s_cdc_tx_line) - 1U;
+    }
+
+    memcpy(s_cdc_tx_line, buf, copy_len);
+    s_cdc_tx_line[copy_len] = '\0';
+    return CDC_Transmit_FS((uint8_t *)s_cdc_tx_line, (uint16_t)copy_len);
 }
 
 static void CDC_AppendFixed6(char *dst, size_t dst_len, float value)
@@ -383,7 +413,6 @@ static void CDC_QueueTelemetry(const CDC_DebugTelemetry_t *t)
     }
     s_cdc_telem.latest = *t;
     s_cdc_telem.valid = 1U;
-    s_cdc_telem.last_tick_ms = HAL_GetTick();
 }
 
 void CDC_Debug_SetTelemetry(const CDC_DebugTelemetry_t *telemetry)
@@ -440,7 +469,7 @@ static void CDC_SendTelemetryLine(void)
                    s_cdc_telem.latest.axis_error,
                    s_cdc_telem.latest.control_mode,
                    s_cdc_telem.latest.param_state);
-    (void)CDC_SendString(line);
+    (void)CDC_SendBuffered(line, strlen(line));
 }
 
 static void CDC_HandleCanLikeCommand(uint8_t func, uint8_t node, const uint8_t *payload, uint8_t len)
@@ -583,7 +612,6 @@ static void CDC_HandleLine(const char *line)
     uint8_t byteLen = 0U;
     uint8_t func = 0U;
     uint8_t node = 0U;
-
     if (line == NULL)
     {
         return;
@@ -775,6 +803,8 @@ static void CDC_HandleLine(const char *line)
 
 void CDC_Debug_Service(void)
 {
+    static uint32_t s_last_telem_tx_ms = 0U;
+
     if (s_cdc_rx.ready != 0U)
     {
         CDC_HandleLine(s_cdc_rx.line);
@@ -782,10 +812,10 @@ void CDC_Debug_Service(void)
         s_cdc_rx.ready = 0U;
     }
 
-    if ((s_cdc_telem.valid != 0U) && ((HAL_GetTick() - s_cdc_telem.last_tick_ms) >= CDC_TELEM_PERIOD_MS))
+    if ((s_cdc_telem.valid != 0U) && ((HAL_GetTick() - s_last_telem_tx_ms) >= CDC_TELEM_PERIOD_MS))
     {
         CDC_SendTelemetryLine();
-        s_cdc_telem.last_tick_ms = HAL_GetTick();
+        s_last_telem_tx_ms = HAL_GetTick();
     }
 }
 

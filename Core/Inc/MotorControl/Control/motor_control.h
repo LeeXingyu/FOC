@@ -43,4 +43,7 @@ fixp30_t Bus_Voltage_Compensation(CurrCtrl_t *pCurrCtrl, const fixp30_t udc_pu);
  */
 void Open_Loop_Control();
 
+float MotorControl_GetIqRawDisplayA(void);
+float MotorControl_GetIqFilteredDisplayA(void);
+
 #endif /* INC_MOTORCONTROL_CORE_MOTOR_CONTROL_H_ */

@@ -59,25 +59,9 @@
 volatile uint8_t g_comm_io1_irq_pending = 0U;
 volatile uint8_t g_comm_io2_irq_pending = 0U;
 volatile uint8_t g_comm_int_irq_pending = 0U;
-volatile uint8_t g_mc_high_freq_busy = 0U;
-volatile uint8_t g_mc_medium_freq_busy = 0U;
 volatile uint32_t g_rtos_task_create_fail_mask = 0U;
 
 /* USER CODE END Variables */
-/* Definitions for mcHighFreqTask */
-osThreadId_t mcHighFreqTaskHandle;
-const osThreadAttr_t mcHighFreqTask_attributes = {
-  .name = "mcHighFreqTask",
-  .priority = (osPriority_t) osPriorityHigh,
-  .stack_size = 1024 * 4
-};
-/* Definitions for mcMediumFreqTask */
-osThreadId_t mcMediumFreqTaskHandle;
-const osThreadAttr_t mcMediumFreqTask_attributes = {
-  .name = "mcMediumFreqTask",
-  .priority = (osPriority_t) osPriorityAboveNormal,
-  .stack_size = 512 * 4
-};
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
@@ -177,16 +161,6 @@ void MX_FREERTOS_Init(void) {
   if (temTaskHandle == NULL)
   {
     RTOS_MarkTaskCreateFailure(1UL << 2);
-  }
-  mcHighFreqTaskHandle = osThreadNew(StartHighFrequencyTask, NULL, &mcHighFreqTask_attributes);
-  if (mcHighFreqTaskHandle == NULL)
-  {
-    RTOS_MarkTaskCreateFailure(1UL << 3);
-  }
-  mcMediumFreqTaskHandle = osThreadNew(StartMediumFrequencyTask, NULL, &mcMediumFreqTask_attributes);
-  if (mcMediumFreqTaskHandle == NULL)
-  {
-    RTOS_MarkTaskCreateFailure(1UL << 4);
   }
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */

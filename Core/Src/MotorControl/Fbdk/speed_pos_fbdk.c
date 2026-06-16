@@ -15,11 +15,15 @@ static uint32_t s_prevSpeedRawNative = 0U;
 static int64_t s_absEncoderNative = 0;
 static bool s_circleHistoryValid = false;
 static bool s_speedHistoryValid = false;
+static float s_speedObserverRpm = 0.0f;
+static float s_prevAngleDeg = 0.0f;
+static bool s_angleObserverValid = false;
 
 static uint32_t SpeedPos_GetNativeCounts(void)
 {
     return Get_Angle_CountNative();
 }
+
 /***
  * @brief Get the signed delta between two encoder counts.
  * @param cur: The current encoder count.
@@ -85,6 +89,66 @@ static void SpeedPos_ResetSpeedHistory(uint32_t rawNative)
 {
     s_prevSpeedRawNative = rawNative;
     s_speedHistoryValid = true;
+}
+
+static float SpeedPos_GetRpmFromDelta(int32_t deltaNative, uint32_t counts, float samplePeriodS)
+{
+    if ((counts <= 1U) || (samplePeriodS <= 0.0f))
+    {
+        return 0.0f;
+    }
+
+    return ((float)deltaNative / (float)counts) / samplePeriodS * 60.0f;
+}
+
+static float SpeedPos_ClampFloat(float value, float minValue, float maxValue)
+{
+    if (value < minValue)
+    {
+        return minValue;
+    }
+    if (value > maxValue)
+    {
+        return maxValue;
+    }
+    return value;
+}
+
+static float SpeedPos_GetAngleDeg(uint32_t rawNative, uint32_t counts)
+{
+    if (counts <= 1U)
+    {
+        return 0.0f;
+    }
+
+    return ((float)rawNative * 360.0f) / (float)counts;
+}
+
+static float SpeedPos_WrapDeltaDeg(float deltaDeg)
+{
+    if (deltaDeg > 180.0f)
+    {
+        deltaDeg -= 360.0f;
+    }
+    else if (deltaDeg < -180.0f)
+    {
+        deltaDeg += 360.0f;
+    }
+
+    return deltaDeg;
+}
+
+static float SpeedPos_AdaptiveAlpha(float speedRpm)
+{
+    float alpha;
+    float absSpeed = fabsf(speedRpm);
+
+    /*
+     * 低速更强平滑，高速逐渐放开响应。
+     * 先把低速抖动压下去，再观察速度环是否还在放大噪声。
+     */
+    alpha = 0.03f + (absSpeed / 800.0f);
+    return SpeedPos_ClampFloat(alpha, 0.03f, 0.12f);
 }
 /****
  * 
@@ -160,17 +224,60 @@ void Sensor_Update_Kalman(void)
     {
         SpeedPos_ResetSpeedHistory(curRawNative);
         g_axis.fbdk.fSpeedKalman = 0.0f;
+        s_speedObserverRpm = 0.0f;
+        s_angleObserverValid = false;
         return;
     }
 
-    deltaNative = SpeedPos_SignedDelta(curRawNative, s_prevSpeedRawNative, counts);
-    if (fabsf((float)deltaNative) > 1.0f)
+#if SPEED_MEAS_USE_ANGLE_OBSERVER
     {
-        speedRpmRaw = ((float)deltaNative / (float)counts) / samplePeriodS * 60.0f;
-    }
+        float angleDeg = SpeedPos_GetAngleDeg(curRawNative, counts);
+        float deltaDeg;
+        float rawRpm;
+        float alpha;
 
+        if (!s_angleObserverValid)
+        {
+            s_prevAngleDeg = angleDeg;
+            s_angleObserverValid = true;
+            s_speedObserverRpm = 0.0f;
+            g_axis.fbdk.fSpeedKalman = 0.0f;
+            s_prevSpeedRawNative = curRawNative;
+            return;
+        }
+
+        deltaDeg = SpeedPos_WrapDeltaDeg(angleDeg - s_prevAngleDeg);
+        s_prevAngleDeg = angleDeg;
+
+        rawRpm = deltaDeg * SPEED_MEASUREMENT_RATE_HZ / 6.0f;
+        rawRpm = SpeedPos_ClampFloat(rawRpm, -20000.0f, 20000.0f);
+
+        /*
+         * 低速观测轻平滑，避免单个计数跳变直接冲进速度环。
+         * 这里保留很小的 alpha，让动态响应不要太钝。
+         */
+        alpha = SpeedPos_AdaptiveAlpha(rawRpm);
+        s_speedObserverRpm += alpha * (rawRpm - s_speedObserverRpm);
+        g_axis.fbdk.fSpeedKalman = s_speedObserverRpm;
+        s_prevSpeedRawNative = curRawNative;
+        return;
+    }
+#else
+    deltaNative = SpeedPos_SignedDelta(curRawNative, s_prevSpeedRawNative, counts);
+    /*
+     * 连续差分测速：
+     * 不再使用 delta > 1 的硬门限，避免低速时速度被切成 0 或阶跃值。
+     */
+    speedRpmRaw = SpeedPos_GetRpmFromDelta(deltaNative, counts, samplePeriodS);
+
+    /*
+     * 只做轻微限幅，防止偶发毛刺把速度反馈带飞。
+     * 这里保守一点，后续你也可以根据实际最高转速再收紧/放宽。
+     */
+    speedRpmRaw = SpeedPos_ClampFloat(speedRpmRaw, -20000.0f, 20000.0f);
     g_axis.fbdk.fSpeedKalman = Kalman_Filter_Calc(&g_motorSpeedKalmanFilter, speedRpmRaw);
     s_prevSpeedRawNative = curRawNative;
+#endif
 }
 /***   
  * @brief Calculate the speed and update the circle history.
@@ -193,6 +300,8 @@ void Calc_Speed(fixp30_t *pSpeed)
         g_axis.fbdk.fSpeedKalman = 0.0f;
         SpeedPos_ResetCircleHistory(rawNative);
         SpeedPos_ResetSpeedHistory(rawNative);
+        s_speedObserverRpm = 0.0f;
+        s_angleObserverValid = false;
         *pSpeed = FIXP30(0.0f);
         return;
     }
@@ -295,4 +404,7 @@ void SpeedPos_ResetEstimator(void)
     g_axis.fbdk.fSpeedKalman = 0.0f;
     SpeedPos_ResetCircleHistory(rawNative);
     SpeedPos_ResetSpeedHistory(rawNative);
+    s_speedObserverRpm = 0.0f;
+    s_prevAngleDeg = SpeedPos_GetAngleDeg(rawNative, SpeedPos_GetNativeCounts());
+    s_angleObserverValid = false;
 }

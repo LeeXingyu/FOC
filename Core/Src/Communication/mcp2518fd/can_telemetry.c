@@ -387,7 +387,7 @@ static bool CAN_Telemetry_BuildPeriodicFrame(CanTelemetryFuncCode_t funcCode,
             CAN_Telemetry_PackFloat(&frame[0], FIXP30_toF(g_axis.currCtrl.refIdq.D) * CURRENT_SCALE);
             CAN_Telemetry_PackFloat(&frame[4], FIXP30_toF(g_axis.currCtrl.refIdq.Q) * CURRENT_SCALE);
             CAN_Telemetry_PackFloat(&frame[8], FIXP30_toF(g_axis.currCtrl.calcIdq.D) * CURRENT_SCALE);
-            CAN_Telemetry_PackFloat(&frame[12], FIXP30_toF(g_axis.currCtrl.calcIdq.Q) * CURRENT_SCALE);
+            CAN_Telemetry_PackFloat(&frame[12], MotorControl_GetIqFilteredDisplayA());
             *lenOut = 16U;
             return true;
 
@@ -442,7 +442,7 @@ static bool CAN_Telemetry_BuildPeriodicFrame(CanTelemetryFuncCode_t funcCode,
             if (APP_CAN_MAX_DATA_BYTES >= 16U)
             {
                 CAN_Telemetry_PackFloat(&frame[8], FIXP30_toF(g_axis.currCtrl.calcIdq.D) * CURRENT_SCALE);
-                CAN_Telemetry_PackFloat(&frame[12], FIXP30_toF(g_axis.currCtrl.calcIdq.Q) * CURRENT_SCALE);
+                CAN_Telemetry_PackFloat(&frame[12], MotorControl_GetIqFilteredDisplayA());
                 *lenOut = 16U;
             }
 #endif
@@ -450,7 +450,7 @@ static bool CAN_Telemetry_BuildPeriodicFrame(CanTelemetryFuncCode_t funcCode,
 
         case CAN_FC_TELEM_CUR_CALC:
             CAN_Telemetry_PackFloat(&frame[0], FIXP30_toF(g_axis.currCtrl.calcIdq.D) * CURRENT_SCALE);
-            CAN_Telemetry_PackFloat(&frame[4], FIXP30_toF(g_axis.currCtrl.calcIdq.Q) * CURRENT_SCALE);
+            CAN_Telemetry_PackFloat(&frame[4], MotorControl_GetIqFilteredDisplayA());
             *lenOut = 8U;
             return true;
 

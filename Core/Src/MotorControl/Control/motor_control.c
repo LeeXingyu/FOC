@@ -15,14 +15,15 @@
 #include "mc_tasks.h"
 #include "param_identify.h"
 #include "encoder.h"
-
 CurrentFilter_t iqFilter;
+static float s_iqRawDisplayA = 0.0f;
+static float s_iqFilteredDisplayA = 0.0f;
 volatile int32_t g_dbg_q_vector_sign = 0;
 volatile uint8_t g_dbg_dir_consistent = 0U;
 
 //空载
-#define KF_R 7.0f
-#define KF_Q 0.01f
+#define KF_R 3.0f
+#define KF_Q 0.05f
 //带载
 //#define KF_R 7.0f
 //#define KF_Q 0.04f
@@ -51,8 +52,8 @@ void PID_All_Init()
 	//PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.15f);
 	//PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 20.0f);
 	//
-	PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.15f);
-	PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 20.0f);
+	PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.06f);
+	PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 5.0f);
 	PIDREGDQX_CURRENT_setOutputLimitsD(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(fDutyLimit * 0.95f), FIXP30(-fDutyLimit * 0.95f));
 	PIDREGDQX_CURRENT_setOutputLimitsQ(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(fDutyLimit), FIXP30(-fDutyLimit));
 
@@ -61,8 +62,8 @@ void PID_All_Init()
 	PIDREG_SPEED_init(&g_axis.speedCtrl.PIDSpeed, CURRENT_SCALE, FREQUENCY_SCALE, SPEED_CONTROL_RATE);
 	PIDREG_SPEED_setOutputLimits(&g_axis.speedCtrl.PIDSpeed, currentLimit_pu, -currentLimit_pu);
 
-	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 0.2f);
-	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 0.4f);
+	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 0.7f);
+	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 0.1f);
 }
 
 /**
@@ -111,13 +112,16 @@ void Motor_Control_Init(void)
 	g_axis.speedCtrl.speedRef_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
-	MC_Set_Speed_Ramp(100.0f);
+	MC_Set_Speed_Ramp(60.0f);
 
 	// 初始化状态
 	g_axis.state = AXIS_STATE_IDLE;
 	g_axis.bMCBootCompleted = true;
 
-    iqFilter.fAlpha = 0.5f;
+    iqFilter.fAlpha = 0.25f;
+    iqFilter.fCurr = 0.0f;
+    s_iqRawDisplayA = 0.0f;
+    s_iqFilteredDisplayA = 0.0f;
 }
 
 /**
@@ -156,7 +160,7 @@ uint16_t FOC_Control(void)
 	{
 		 Speed_Control(&g_axis.speedCtrl, g_axis.enCtrlMode);
 		 g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
-		//g_axis.currCtrl.refIdq.Q = FIXP30(0.05f);   // 你想要的固定力矩电流
+		//g_axis.currCtrl.refIdq.Q = FIXP30(0.001f);   // 你想要的固定力矩电流
 		iSpeedCount = 0;
 	}
 
@@ -196,8 +200,10 @@ void Curr_Control(CurrCtrl_t *pCurrCtrl, CurrCtrlInput_t* pCurrCtrlInput)
 	// Park变换
 	Park_Current(pCurrCtrl->calcIab, &cossinPark, &pCurrCtrl->calcIdq);
 
-	CurrentFilter_Update(&iqFilter, FIXP30_toF(pCurrCtrl->calcIdq.Q) * CURRENT_SCALE);
-	pCurrCtrl->calcIdq.Q = FIXP30(iqFilter.fCurr / (float)CURRENT_SCALE);
+    const float iqRawA = FIXP30_toF(pCurrCtrl->calcIdq.Q) * CURRENT_SCALE;
+    CurrentFilter_Update(&iqFilter, iqRawA);
+    s_iqRawDisplayA = iqRawA;
+    s_iqFilteredDisplayA = iqFilter.fCurr;
 
 //	g_axis.currCtrl.refIdq.Q = FIXP30(0.08f / CURRENT_SCALE);
 
@@ -215,6 +221,7 @@ void Curr_Control(CurrCtrl_t *pCurrCtrl, CurrCtrlInput_t* pCurrCtrlInput)
 			(g_axis.currCtrl.refIdq.Q - pCurrCtrl->calcIdq.Q),
 			FIXP30(0.0f)
 			);
+
 
 	g_axis.currCtrl.outIdq.D = FIXP30(0.0f);
 	g_axis.currCtrl.outIdq.Q = PIDREGDQX_CURRENT_getOutQ(&g_axis.currCtrl.pid_IdIqX_obj);
@@ -249,10 +256,12 @@ void Speed_Control(SpeedCtrl_t *pSpeedCtrl, ControlMode_En enControlMode)
 		pSpeedCtrl->speedRefRamp_pu = pSpeedCtrl->speedRef_pu;
 	}
 
+
 	fixp30_t speedError = pSpeedCtrl->speedRefRamp_pu - pSpeedCtrl->speedMeas_pu;
 	fixp30_t IqRef_pu = PIDREG_SPEED_run(&pSpeedCtrl->PIDSpeed, speedError);
 
 	fixp30_t IqRefCircleMax = FIXP30(12.0 / CURRENT_SCALE);
+	IqRef_pu = FIXP_sat(IqRef_pu, IqRefCircleMax, -IqRefCircleMax);
 
 	pSpeedCtrl->iqOut_pu = FIXP_sat(IqRef_pu, IqRefCircleMax, -IqRefCircleMax);
 }
@@ -289,8 +298,9 @@ void Open_Loop_Control()
 	// 打开PWM输出
 	//SwitchOn_PWM(g_axis.pPWMCHandle);
 
+
 	// 电气角度
-	fixp30_t anglePark_pu = g_axis.posCtrl.openLoopAngle_pu;
+	fixp30_t anglePark_pu = FIXP30(0.0F);
 
 	// 获取三相电流
 	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
@@ -311,13 +321,15 @@ void Open_Loop_Control()
 	Update_Open_Loop_Angle(&g_axis.posCtrl, g_axis.speedCtrl.speedRef_pu);
 
 	// 获取电气角度
-	// 开环时使用自增角度，避免未初始化角度导致飞车
-	// Get_Angle(&anglePark_pu);
+	anglePark_pu = g_axis.posCtrl.openLoopAngle_pu;
+//	Get_Angle(&anglePark_pu);
 
 	// 获取测量角度的余弦、正弦值
 	FIXP_CosSin_t cossinPwm;
 	FIXP30_CosSinPU(anglePark_pu, &cossinPwm);
 
+	g_axis.currCtrl.refIdq.D = FIXP30(0.0f);
+	g_axis.currCtrl.refIdq.Q = FIXP30(0.05f);
 
 	// 反park变换
 	Inv_Park_Duty(g_axis.currCtrl.refIdq, &cossinPwm, &dutyAb);
@@ -339,4 +351,14 @@ void Update_Open_Loop_Angle(PosCtrl_t *pHandle, fixp30_t speedRef)
 	angle_pu += angleStep_pu;
 	angle_pu &= (FIXP30(1.0f) - 1);
 	pHandle->openLoopAngle_pu = angle_pu;
+}
+
+float MotorControl_GetIqRawDisplayA(void)
+{
+	return s_iqRawDisplayA;
+}
+
+float MotorControl_GetIqFilteredDisplayA(void)
+{
+	return s_iqFilteredDisplayA;
 }

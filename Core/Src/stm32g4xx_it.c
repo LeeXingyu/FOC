@@ -347,10 +347,7 @@ void TIM1_UP_TIM16_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM1_UP_TIM16_IRQn 0 */
   LL_TIM_ClearFlag_UPDATE(TIM1);
-  if ((mcHighFreqTaskHandle != NULL) && (g_mc_high_freq_busy == 0U))
-  {
-    (void)osThreadFlagsSet(mcHighFreqTaskHandle, MC_HIGH_FREQ_TASK_FLAG);
-  }
+  High_Frequency_Task();
   HAL_TIM_IRQHandler(&htim1);
   /* USER CODE END TIM1_UP_TIM16_IRQn 0 */
   /* USER CODE BEGIN TIM1_UP_TIM16_IRQn 1 */
@@ -378,11 +375,9 @@ void TIM2_IRQHandler(void)
 void TIM3_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM3_IRQn 0 */
-  LL_TIM_ClearFlag_UPDATE(TIM3);
-  if ((mcMediumFreqTaskHandle != NULL) && (g_mc_medium_freq_busy == 0U))
-  {
-    (void)osThreadFlagsSet(mcMediumFreqTaskHandle, MC_MEDIUM_FREQ_TASK_FLAG);
-  }
+  //LL_TIM_ClearFlag_UPDATE(TIM3);
+  Medium_Frequency_Task();
+  HAL_TIM_IRQHandler(&htim3);
   /* USER CODE END TIM3_IRQn 0 */
   /* USER CODE BEGIN TIM3_IRQn 1 */
 
