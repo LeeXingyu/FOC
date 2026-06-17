@@ -18,6 +18,9 @@ static bool s_speedHistoryValid = false;
 static float s_speedObserverRpm = 0.0f;
 static float s_prevAngleDeg = 0.0f;
 static bool s_angleObserverValid = false;
+static float s_speedWindowDeg[SPEED_MEAS_WINDOW_SAMPLES] = {0.0f};
+static uint8_t s_speedWindowIdx = 0U;
+static uint8_t s_speedWindowValid = 0U;
 
 static uint32_t SpeedPos_GetNativeCounts(void)
 {
@@ -147,8 +150,36 @@ static float SpeedPos_AdaptiveAlpha(float speedRpm)
      * 低速更强平滑，高速逐渐放开响应。
      * 先把低速抖动压下去，再观察速度环是否还在放大噪声。
      */
-    alpha = 0.03f + (absSpeed / 800.0f);
-    return SpeedPos_ClampFloat(alpha, 0.03f, 0.12f);
+    alpha = 0.005f + (absSpeed / 800.0f);
+    return SpeedPos_ClampFloat(alpha, 0.002f, 0.01f);
+}
+
+static float SpeedPos_CalcWindowSpeedRpm(float angleDeg)
+{
+    float deltaDeg;
+    float rawRpm;
+    uint8_t nextIdx;
+
+    if (SPEED_MEAS_WINDOW_SAMPLES < 2U)
+    {
+        return 0.0f;
+    }
+
+    nextIdx = (uint8_t)((s_speedWindowIdx + 1U) % SPEED_MEAS_WINDOW_SAMPLES);
+    if (s_speedWindowValid < SPEED_MEAS_WINDOW_SAMPLES)
+    {
+        s_speedWindowDeg[s_speedWindowIdx] = angleDeg;
+        s_speedWindowValid++;
+        s_speedWindowIdx = nextIdx;
+        return 0.0f;
+    }
+
+    deltaDeg = SpeedPos_WrapDeltaDeg(angleDeg - s_speedWindowDeg[nextIdx]);
+    s_speedWindowDeg[nextIdx] = angleDeg;
+    s_speedWindowIdx = nextIdx;
+
+    rawRpm = (deltaDeg * SPEED_MEASUREMENT_RATE_HZ) / (6.0f * (float)SPEED_MEAS_WINDOW_SAMPLES);
+    return SpeedPos_ClampFloat(rawRpm, -20000.0f, 20000.0f);
 }
 /****
  * 
@@ -232,7 +263,6 @@ void Sensor_Update_Kalman(void)
 #if SPEED_MEAS_USE_ANGLE_OBSERVER
     {
         float angleDeg = SpeedPos_GetAngleDeg(curRawNative, counts);
-        float deltaDeg;
         float rawRpm;
         float alpha;
 
@@ -243,14 +273,17 @@ void Sensor_Update_Kalman(void)
             s_speedObserverRpm = 0.0f;
             g_axis.fbdk.fSpeedKalman = 0.0f;
             s_prevSpeedRawNative = curRawNative;
+            s_speedWindowIdx = 0U;
+            s_speedWindowValid = 0U;
+            for (uint8_t i = 0U; i < SPEED_MEAS_WINDOW_SAMPLES; ++i)
+            {
+                s_speedWindowDeg[i] = angleDeg;
+            }
             return;
         }
 
-        deltaDeg = SpeedPos_WrapDeltaDeg(angleDeg - s_prevAngleDeg);
         s_prevAngleDeg = angleDeg;
-
-        rawRpm = deltaDeg * SPEED_MEASUREMENT_RATE_HZ / 6.0f;
-        rawRpm = SpeedPos_ClampFloat(rawRpm, -20000.0f, 20000.0f);
+        rawRpm = SpeedPos_CalcWindowSpeedRpm(angleDeg);
 
         /*
          * 低速观测轻平滑，避免单个计数跳变直接冲进速度环。

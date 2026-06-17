@@ -427,12 +427,11 @@ bool CDC_Debug_Enabled(void)
 
 static void CDC_SendTelemetryLine(void)
 {
-    char pos[24];
-    char poss[24];
     char mech[24];
     char app[24];
-    char app_pu[24];
     char spd[24];
+    char spmr[24];
+    char sper[24];
     char id[24];
     char iq[24];
     char iqr[24];
@@ -443,25 +442,23 @@ static void CDC_SendTelemetryLine(void)
         return;
     }
 
-    CDC_AppendFixed6(pos, sizeof(pos), s_cdc_telem.latest.position_deg);
-    CDC_AppendFixed6(poss, sizeof(poss), s_cdc_telem.latest.position_cont_deg);
     CDC_AppendFixed6(mech, sizeof(mech), s_cdc_telem.latest.position_mech_deg);
     CDC_AppendFixed6(app, sizeof(app), s_cdc_telem.latest.position_app_deg);
-    CDC_AppendFixed6(app_pu, sizeof(app_pu), s_cdc_telem.latest.position_app_pu);
     CDC_AppendFixed6(spd, sizeof(spd), s_cdc_telem.latest.speed_rpm);
+    CDC_AppendFixed6(spmr, sizeof(spmr), s_cdc_telem.latest.speed_meas_rpm);
+    CDC_AppendFixed6(sper, sizeof(sper), s_cdc_telem.latest.speed_error_rpm);
     CDC_AppendFixed6(id, sizeof(id), s_cdc_telem.latest.current_d_a);
     CDC_AppendFixed6(iq, sizeof(iq), s_cdc_telem.latest.current_q_a);
     CDC_AppendFixed6(iqr, sizeof(iqr), s_cdc_telem.latest.current_ref_q_a);
 
     (void)snprintf(line,
                    sizeof(line),
-                   "TEL POS=%s POSS=%s MECH=%s APPPU=%s APP=%s SPD=%s ID=%s IQ=%s IQR=%s AST=%u ERR=%u MODE=%u PST=%u\r\n",
-                   pos,
-                   poss,
+                   "TEL MECH=%s APP=%s SPD=%s SPMR=%s SPER=%s ID=%s IQ=%s IQR=%s AST=%u ERR=%u MODE=%u PST=%u\r\n",
                    mech,
-                   app_pu,
                    app,
                    spd,
+                   spmr,
+                   sper,
                    id,
                    iq,
                    iqr,

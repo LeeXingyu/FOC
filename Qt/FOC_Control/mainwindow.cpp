@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QChart>
 #include <QChartView>
+#include <QBrush>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -17,23 +18,138 @@
 #include <QLineEdit>
 #include <QLineSeries>
 #include <QPainter>
+#include <QPen>
 #include <QPointF>
 #include <QPushButton>
 #include <QPlainTextEdit>
-#include <QRegularExpression>
 #include <QScrollBar>
 #include <QSlider>
 #include <QSpinBox>
+#include <QMouseEvent>
+#include <QToolTip>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QValueAxis>
+#include <limits>
 
 namespace
 {
 QString fmt6(double v) { return QString::number(v, 'f', 6); }
+
+static void trimPointBuffer(QVector<QPointF> &points, int maxPoints, int dropChunk = 256)
+{
+    if (points.size() <= maxPoints)
+    {
+        return;
+    }
+
+    const int excess = points.size() - maxPoints;
+    const int dropCount = qMax(excess, dropChunk);
+    points.erase(points.begin(), points.begin() + qMin(dropCount, points.size()));
+}
+}
+
+MainWindow::ChartView::ChartView(QWidget *parent)
+    : QChartView(parent)
+{
+    setMouseTracking(true);
+    setRubberBand(QChartView::NoRubberBand);
+}
+
+void MainWindow::ChartView::mousePressEvent(QMouseEvent *event)
+{
+    QChartView::mousePressEvent(event);
+    if (event->button() == Qt::LeftButton)
+    {
+        QMetaObject::invokeMethod(this, [this, eventPos = event->pos()]() {
+            if (chart() == nullptr)
+            {
+                return;
+            }
+
+            const QPointF scenePos = mapToScene(eventPos);
+            const QList<QAbstractSeries *> seriesList = chart()->series();
+            qreal bestDist2 = std::numeric_limits<qreal>::max();
+            QString bestText;
+
+            for (QAbstractSeries *abstractSeries : seriesList)
+            {
+                auto *series = qobject_cast<QLineSeries *>(abstractSeries);
+                if (series == nullptr || !series->isVisible())
+                {
+                    continue;
+                }
+
+                const QVector<QPointF> points = series->pointsVector();
+                for (const QPointF &point : points)
+                {
+                    const QPointF scenePoint = chart()->mapToPosition(point, series);
+                    const qreal dx = scenePoint.x() - scenePos.x();
+                    const qreal dy = scenePoint.y() - scenePos.y();
+                    const qreal dist2 = (dx * dx) + (dy * dy);
+                    if (dist2 < bestDist2)
+                    {
+                        bestDist2 = dist2;
+                        bestText = QStringLiteral("%1\nx=%2\ny=%3")
+                                       .arg(series->name(),
+                                            QString::number(point.x(), 'f', 0),
+                                            QString::number(point.y(), 'f', 3));
+                    }
+                }
+            }
+
+            if (!bestText.isEmpty())
+            {
+                QToolTip::showText(mapToGlobal(eventPos), bestText, this);
+            }
+        }, Qt::QueuedConnection);
+    }
+}
+
+void MainWindow::ChartView::mouseMoveEvent(QMouseEvent *event)
+{
+    QChartView::mouseMoveEvent(event);
+    if (chart() != nullptr)
+    {
+        const QPointF scenePos = mapToScene(event->pos());
+        const QList<QAbstractSeries *> seriesList = chart()->series();
+        qreal bestDist2 = std::numeric_limits<qreal>::max();
+        QString bestText;
+
+        for (QAbstractSeries *abstractSeries : seriesList)
+        {
+            auto *series = qobject_cast<QLineSeries *>(abstractSeries);
+            if (series == nullptr || !series->isVisible())
+            {
+                continue;
+            }
+
+            const QVector<QPointF> points = series->pointsVector();
+            for (const QPointF &point : points)
+            {
+                const QPointF scenePoint = chart()->mapToPosition(point, series);
+                const qreal dx = scenePoint.x() - scenePos.x();
+                const qreal dy = scenePoint.y() - scenePos.y();
+                const qreal dist2 = (dx * dx) + (dy * dy);
+                if (dist2 < bestDist2)
+                {
+                    bestDist2 = dist2;
+                    bestText = QStringLiteral("%1\nx=%2\ny=%3")
+                                   .arg(series->name(),
+                                        QString::number(point.x(), 'f', 0),
+                                        QString::number(point.y(), 'f', 3));
+                }
+            }
+        }
+
+        if (!bestText.isEmpty())
+        {
+            QToolTip::showText(mapToGlobal(event->pos()), bestText, this);
+        }
+    }
 }
 
 MainWindow::MainWindow(QWidget *parent)
@@ -52,6 +168,30 @@ MainWindow::MainWindow(QWidget *parent)
         if ((m_lastTelemetryTick != 0) && ((now - m_lastTelemetryTick) > 1000))
         {
             m_statusLink->setText(tr("Waiting telemetry..."));
+        }
+    });
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this]() {
+        if (m_tabs == nullptr)
+        {
+            return;
+        }
+
+        const QWidget *page = m_tabs->currentWidget();
+        if (page == m_anglePage)
+        {
+            refreshAngleChart();
+        }
+        else if (page == m_speedPage)
+        {
+            refreshSpeedChart();
+        }
+        else if (page == m_iqRefPage)
+        {
+            refreshIqRefChart();
+        }
+        else if (page == m_speedMeasPage)
+        {
+            refreshSpeedMeasChart();
         }
     });
 
@@ -83,14 +223,20 @@ void MainWindow::setupUi()
     m_controlPage = new QWidget(m_tabs);
     m_anglePage = new QWidget(m_tabs);
     m_speedPage = new QWidget(m_tabs);
+    m_iqRefPage = new QWidget(m_tabs);
+    m_speedMeasPage = new QWidget(m_tabs);
     m_debugPage = new QWidget(m_tabs);
     setupControlPage(m_controlPage);
     setupAnglePage(m_anglePage);
     setupSpeedPage(m_speedPage);
+    setupIqRefPage(m_iqRefPage);
+    setupSpeedMeasPage(m_speedMeasPage);
     setupDebugPage(m_debugPage);
     m_tabs->addTab(m_controlPage, tr("Control"));
     m_tabs->addTab(m_anglePage, tr("Angle"));
     m_tabs->addTab(m_speedPage, tr("Speed"));
+    m_tabs->addTab(m_iqRefPage, tr("Iq Ref"));
+    m_tabs->addTab(m_speedMeasPage, tr("Speed Meas"));
     m_tabs->addTab(m_debugPage, tr("Debug"));
 
     root->addWidget(m_tabs, 1);
@@ -310,7 +456,8 @@ void MainWindow::setupAnglePage(QWidget *page)
     }
     chart->legend()->setVisible(true);
     chart->setTitle(tr("Rotor Angle Compare"));
-    m_angleChartView = new QChartView(chart, chartBox);
+    m_angleChartView = new ChartView(chartBox);
+    m_angleChartView->setChart(chart);
     m_angleChartView->setRenderHint(QPainter::Antialiasing);
     layout->addWidget(m_angleChartView);
 
@@ -365,11 +512,13 @@ void MainWindow::setupSpeedPage(QWidget *page)
     m_statusSpeed = new QLabel(tr("0.000000"), statusGroup);
     m_speedLink = new QLabel(tr("Waiting telemetry..."), statusGroup);
     m_speedDetailLabel = new QLabel(tr("SPEED: 0.000000 rpm | ID: 0.000000 A | IQ: 0.000000 A"), statusGroup);
+    m_speedPeakLabel = new QLabel(tr("ID: [0.000000, 0.000000] A | IQ: [0.000000, 0.000000] A"), statusGroup);
     statusLayout->addWidget(new QLabel(tr("Speed rpm"), statusGroup), 0, 0);
     statusLayout->addWidget(m_statusSpeed, 0, 1);
     statusLayout->addWidget(new QLabel(tr("Link"), statusGroup), 0, 2);
     statusLayout->addWidget(m_speedLink, 0, 3);
     statusLayout->addWidget(m_speedDetailLabel, 1, 0, 1, 4);
+    statusLayout->addWidget(m_speedPeakLabel, 2, 0, 1, 4);
 
     auto *chartBox = new QGroupBox(tr("Speed Trend"), page);
     auto *layout = new QVBoxLayout(chartBox);
@@ -412,7 +561,8 @@ void MainWindow::setupSpeedPage(QWidget *page)
     }
     chart->legend()->setVisible(true);
     chart->setTitle(tr("Speed / Current Trend"));
-    m_speedChartView = new QChartView(chart, chartBox);
+    m_speedChartView = new ChartView(chartBox);
+    m_speedChartView->setChart(chart);
     m_speedChartView->setRenderHint(QPainter::Antialiasing);
     layout->addWidget(m_speedChartView);
 
@@ -456,6 +606,192 @@ void MainWindow::setupSpeedPage(QWidget *page)
     connect(m_speedZoomInButton, &QToolButton::clicked, this, [this]() { zoomSpeedWindow(-300); });
     connect(m_speedZoomOutButton, &QToolButton::clicked, this, [this]() { zoomSpeedWindow(300); });
     connect(m_speedZoomResetButton, &QToolButton::clicked, this, [this]() { resetSpeedWindow(); });
+}
+
+void MainWindow::setupIqRefPage(QWidget *page)
+{
+    auto *root = new QVBoxLayout(page);
+
+    auto *statusGroup = new QGroupBox(tr("Iq Ref Value"), page);
+    auto *statusLayout = new QGridLayout(statusGroup);
+    m_iqRefStatus = new QLabel(tr("0.000000"), statusGroup);
+    m_iqRefLink = new QLabel(tr("Waiting telemetry..."), statusGroup);
+    m_iqRefDetailLabel = new QLabel(tr("IQR: 0.000000 A"), statusGroup);
+    m_iqRefPeakLabel = new QLabel(tr("IQR: [0.000000, 0.000000] A"), statusGroup);
+    statusLayout->addWidget(new QLabel(tr("Iq Ref"), statusGroup), 0, 0);
+    statusLayout->addWidget(m_iqRefStatus, 0, 1);
+    statusLayout->addWidget(new QLabel(tr("Link"), statusGroup), 0, 2);
+    statusLayout->addWidget(m_iqRefLink, 0, 3);
+    statusLayout->addWidget(m_iqRefDetailLabel, 1, 0, 1, 4);
+    statusLayout->addWidget(m_iqRefPeakLabel, 2, 0, 1, 4);
+
+    auto *chartBox = new QGroupBox(tr("Iq Ref Trend"), page);
+    auto *layout = new QVBoxLayout(chartBox);
+    auto *chart = new QChart();
+    m_iqRefSeries = new QLineSeries(page);
+    m_iqRefSeries->setName(tr("Iq Ref"));
+    chart->addSeries(m_iqRefSeries);
+    chart->createDefaultAxes();
+    m_iqRefAxisX = qobject_cast<QValueAxis *>(chart->axes(Qt::Horizontal).first());
+    m_iqRefAxisY = qobject_cast<QValueAxis *>(chart->axes(Qt::Vertical).first());
+    if (m_iqRefAxisX != nullptr)
+    {
+        m_iqRefAxisX->setTitleText(tr("Sample"));
+    }
+    if (m_iqRefAxisY != nullptr)
+    {
+        m_iqRefAxisY->setTitleText(tr("Iq Ref (A)"));
+        m_iqRefAxisY->setRange(-2.5, 2.5);
+        m_iqRefAxisY->setTickCount(11);
+        m_iqRefAxisY->setLabelFormat("%.3f");
+    }
+    chart->legend()->setVisible(true);
+    chart->setTitle(tr("Iq Ref Trend"));
+    m_iqRefChartView = new ChartView(chartBox);
+    m_iqRefChartView->setChart(chart);
+    m_iqRefChartView->setRenderHint(QPainter::Antialiasing);
+    layout->addWidget(m_iqRefChartView);
+
+    m_iqRefTimeSlider = new QSlider(Qt::Horizontal, chartBox);
+    m_iqRefTimeSlider->setRange(0, 0);
+    m_iqRefTimeSlider->setSingleStep(1);
+    m_iqRefTimeSlider->setPageStep(20);
+    layout->addWidget(m_iqRefTimeSlider);
+
+    auto *zoomRow = new QHBoxLayout();
+    m_iqRefZoomOutButton = new QToolButton(chartBox);
+    m_iqRefZoomOutButton->setText(tr("-"));
+    m_iqRefZoomInButton = new QToolButton(chartBox);
+    m_iqRefZoomInButton->setText(tr("+"));
+    m_iqRefZoomResetButton = new QToolButton(chartBox);
+    m_iqRefZoomResetButton->setText(tr("Reset"));
+    zoomRow->addWidget(new QLabel(tr("Zoom"), chartBox));
+    zoomRow->addWidget(m_iqRefZoomOutButton);
+    zoomRow->addWidget(m_iqRefZoomInButton);
+    zoomRow->addWidget(m_iqRefZoomResetButton);
+    zoomRow->addStretch(1);
+    layout->addLayout(zoomRow);
+
+    root->addWidget(statusGroup);
+    root->addWidget(chartBox, 1);
+
+    connect(m_iqRefTimeSlider, &QSlider::valueChanged, this, [this]() {
+        if (!m_iqRefSliderDragging)
+        {
+            refreshIqRefChart();
+        }
+    });
+    connect(m_iqRefTimeSlider, &QSlider::sliderPressed, this, [this]() {
+        m_iqRefSliderDragging = true;
+        m_iqRefAutoFollow = false;
+    });
+    connect(m_iqRefTimeSlider, &QSlider::sliderReleased, this, [this]() {
+        m_iqRefSliderDragging = false;
+        refreshIqRefChart();
+    });
+    connect(m_iqRefZoomInButton, &QToolButton::clicked, this, [this]() { zoomIqRefWindow(-300); });
+    connect(m_iqRefZoomOutButton, &QToolButton::clicked, this, [this]() { zoomIqRefWindow(300); });
+    connect(m_iqRefZoomResetButton, &QToolButton::clicked, this, [this]() { resetIqRefWindow(); });
+}
+
+void MainWindow::setupSpeedMeasPage(QWidget *page)
+{
+    auto *root = new QVBoxLayout(page);
+
+    auto *statusGroup = new QGroupBox(tr("Speed Meas Value"), page);
+    auto *statusLayout = new QGridLayout(statusGroup);
+    m_speedMeasStatus = new QLabel(tr("0.000000"), statusGroup);
+    m_speedMeasLink = new QLabel(tr("Waiting telemetry..."), statusGroup);
+    m_speedMeasDetailLabel = new QLabel(tr("SpeedMeas: 0.000000 rpm | SpeedErr: 0.000000 rpm"), statusGroup);
+    m_speedMeasPeakLabel = new QLabel(tr("SpeedMeas: [0.000000, 0.000000] rpm | SpeedErr: [0.000000, 0.000000] rpm"), statusGroup);
+    statusLayout->addWidget(new QLabel(tr("Speed Meas"), statusGroup), 0, 0);
+    statusLayout->addWidget(m_speedMeasStatus, 0, 1);
+    statusLayout->addWidget(new QLabel(tr("Link"), statusGroup), 0, 2);
+    statusLayout->addWidget(m_speedMeasLink, 0, 3);
+    statusLayout->addWidget(m_speedMeasDetailLabel, 1, 0, 1, 4);
+    statusLayout->addWidget(m_speedMeasPeakLabel, 2, 0, 1, 4);
+
+    auto *chartBox = new QGroupBox(tr("Speed Meas Trend"), page);
+    auto *layout = new QVBoxLayout(chartBox);
+    auto *chart = new QChart();
+    m_speedMeasSeries = new QLineSeries(page);
+    m_speedMeasSeries->setName(tr("speedMeas_rpm"));
+    m_speedErrSeries = new QLineSeries(page);
+    m_speedErrSeries->setName(tr("speedError_rpm"));
+    chart->addSeries(m_speedMeasSeries);
+    chart->addSeries(m_speedErrSeries);
+    chart->createDefaultAxes();
+    m_speedMeasAxisX = qobject_cast<QValueAxis *>(chart->axes(Qt::Horizontal).first());
+    m_speedMeasAxisY = qobject_cast<QValueAxis *>(chart->axes(Qt::Vertical).first());
+    if (m_speedMeasAxisX != nullptr)
+    {
+        m_speedMeasAxisX->setTitleText(tr("Sample"));
+    }
+    if (m_speedMeasAxisY != nullptr)
+    {
+        m_speedMeasAxisY->setTitleText(tr("speedMeas_rpm"));
+        m_speedMeasAxisY->setRange(-50.0, 50.0);
+        m_speedMeasAxisY->setTickCount(9);
+        m_speedMeasAxisY->setLabelFormat("%.0f");
+    }
+    m_speedErrAxis = new QValueAxis(chart);
+    m_speedErrAxis->setTitleText(tr("speedError_rpm"));
+    m_speedErrAxis->setRange(-50.0, 50.0);
+    m_speedErrAxis->setTickCount(9);
+    m_speedErrAxis->setLabelFormat("%.0f");
+    chart->addAxis(m_speedErrAxis, Qt::AlignRight);
+    m_speedErrSeries->attachAxis(m_speedErrAxis);
+    if (m_speedMeasAxisY != nullptr)
+    {
+        m_speedErrSeries->detachAxis(m_speedMeasAxisY);
+    }
+    chart->legend()->setVisible(true);
+    chart->setTitle(tr("Speed Measurement / Error (rpm)"));
+    m_speedMeasChartView = new ChartView(chartBox);
+    m_speedMeasChartView->setChart(chart);
+    m_speedMeasChartView->setRenderHint(QPainter::Antialiasing);
+    layout->addWidget(m_speedMeasChartView);
+
+    m_speedMeasTimeSlider = new QSlider(Qt::Horizontal, chartBox);
+    m_speedMeasTimeSlider->setRange(0, 0);
+    m_speedMeasTimeSlider->setSingleStep(1);
+    m_speedMeasTimeSlider->setPageStep(20);
+    layout->addWidget(m_speedMeasTimeSlider);
+
+    auto *zoomRow = new QHBoxLayout();
+    m_speedMeasZoomOutButton = new QToolButton(chartBox);
+    m_speedMeasZoomOutButton->setText(tr("-"));
+    m_speedMeasZoomInButton = new QToolButton(chartBox);
+    m_speedMeasZoomInButton->setText(tr("+"));
+    m_speedMeasZoomResetButton = new QToolButton(chartBox);
+    m_speedMeasZoomResetButton->setText(tr("Reset"));
+    zoomRow->addWidget(new QLabel(tr("Zoom"), chartBox));
+    zoomRow->addWidget(m_speedMeasZoomOutButton);
+    zoomRow->addWidget(m_speedMeasZoomInButton);
+    zoomRow->addWidget(m_speedMeasZoomResetButton);
+    zoomRow->addStretch(1);
+    layout->addLayout(zoomRow);
+
+    root->addWidget(statusGroup);
+    root->addWidget(chartBox, 1);
+
+    connect(m_speedMeasTimeSlider, &QSlider::valueChanged, this, [this]() {
+        if (!m_speedMeasSliderDragging)
+        {
+            refreshSpeedMeasChart();
+        }
+    });
+    connect(m_speedMeasTimeSlider, &QSlider::sliderPressed, this, [this]() {
+        m_speedMeasSliderDragging = true;
+        m_speedMeasAutoFollow = false;
+    });
+    connect(m_speedMeasTimeSlider, &QSlider::sliderReleased, this, [this]() {
+        m_speedMeasSliderDragging = false;
+        refreshSpeedMeasChart();
+    });
+    connect(m_speedMeasZoomInButton, &QToolButton::clicked, this, [this]() { zoomSpeedMeasWindow(-300); });
+    connect(m_speedMeasZoomOutButton, &QToolButton::clicked, this, [this]() { zoomSpeedMeasWindow(300); });
+    connect(m_speedMeasZoomResetButton, &QToolButton::clicked, this, [this]() { resetSpeedMeasWindow(); });
 }
 
 void MainWindow::refreshPorts()
@@ -593,13 +929,71 @@ void MainWindow::clearLog()
     {
         m_speedSeries->clear();
     }
+    if (m_speedIqSeries != nullptr)
+    {
+        m_speedIqSeries->clear();
+    }
+    if (m_speedIdSeries != nullptr)
+    {
+        m_speedIdSeries->clear();
+    }
     m_speedPoints.clear();
+    m_speedIqPoints.clear();
+    m_speedIdPoints.clear();
     m_speedSampleIndex = 0;
     if (m_speedTimeSlider != nullptr)
     {
         m_speedTimeSlider->setRange(0, 0);
         m_speedTimeSlider->setValue(0);
     }
+    if (m_speedPeakLabel != nullptr)
+    {
+        m_speedPeakLabel->setText(tr("ID: [0.000000, 0.000000] A | IQ: [0.000000, 0.000000] A"));
+    }
+
+    if (m_iqRefSeries != nullptr)
+    {
+        m_iqRefSeries->clear();
+    }
+    m_iqRefPoints.clear();
+    m_iqRefSampleIndex = 0;
+    if (m_iqRefTimeSlider != nullptr)
+    {
+        m_iqRefTimeSlider->setRange(0, 0);
+        m_iqRefTimeSlider->setValue(0);
+    }
+    if (m_iqRefPeakLabel != nullptr)
+    {
+        m_iqRefPeakLabel->setText(tr("IQR: [0.000000, 0.000000] A"));
+    }
+    m_iqRefAutoFollow = true;
+    m_iqRefSliderDragging = false;
+    m_lastIqRefUiTick = 0;
+
+    if (m_speedMeasSeries != nullptr)
+    {
+        m_speedMeasSeries->clear();
+    }
+    if (m_speedErrSeries != nullptr)
+    {
+        m_speedErrSeries->clear();
+    }
+    m_speedMeasPoints.clear();
+    m_speedErrPoints.clear();
+    m_speedMeasSampleIndex = 0;
+    if (m_speedMeasTimeSlider != nullptr)
+    {
+        m_speedMeasTimeSlider->setRange(0, 0);
+        m_speedMeasTimeSlider->setValue(0);
+    }
+    if (m_speedMeasPeakLabel != nullptr)
+    {
+        m_speedMeasPeakLabel->setText(tr("SpeedMeas: [0.000000, 0.000000] rpm | SpeedErr: [0.000000, 0.000000] rpm"));
+    }
+    m_speedMeasAutoFollow = true;
+    m_speedMeasSliderDragging = false;
+    m_lastSpeedMeasUiTick = 0;
+
     m_angleAutoFollow = true;
     m_speedAutoFollow = true;
     m_angleSliderDragging = false;
@@ -630,7 +1024,7 @@ void MainWindow::pollSerial()
     }
     m_rxLineBuffer.append(chunk);
     int newlinePos = -1;
-    while ((newlinePos = m_rxLineBuffer.indexOf(QRegularExpression("[\\r\\n]"))) >= 0)
+    while ((newlinePos = m_rxLineBuffer.indexOf('\n')) >= 0)
     {
         QString line = m_rxLineBuffer.left(newlinePos).trimmed();
         m_rxLineBuffer.remove(0, newlinePos + 1);
@@ -660,18 +1054,41 @@ void MainWindow::processLine(const QString &line)
     }
 }
 
-bool MainWindow::parseKeyValueFloat(const QString &line, const QString &key, double *value)
+namespace
 {
-    const QRegularExpression rx(QStringLiteral("\\b%1=([-+0-9.eE]+)").arg(QRegularExpression::escape(key)),
-                                QRegularExpression::CaseInsensitiveOption);
-    const QRegularExpressionMatch match = rx.match(line);
-    if (!match.hasMatch())
+bool parseKeyValueFloatFast(const QString &line, const char *key, double *value)
+{
+    if (value == nullptr)
     {
         return false;
     }
 
+    const QString keyStr = QString::fromLatin1(key);
+    const int keyPos = line.indexOf(keyStr, 0, Qt::CaseInsensitive);
+    if (keyPos < 0)
+    {
+        return false;
+    }
+
+    const int eqPos = line.indexOf('=', keyPos + keyStr.size());
+    if (eqPos < 0)
+    {
+        return false;
+    }
+
+    int endPos = eqPos + 1;
+    while (endPos < line.size())
+    {
+        const QChar ch = line.at(endPos);
+        if (!((ch.isDigit()) || (ch == '+') || (ch == '-') || (ch == '.') || (ch == 'e') || (ch == 'E')))
+        {
+            break;
+        }
+        ++endPos;
+    }
+
     bool ok = false;
-    const double v = match.captured(1).toDouble(&ok);
+    const double v = line.mid(eqPos + 1, endPos - (eqPos + 1)).toDouble(&ok);
     if (!ok)
     {
         return false;
@@ -680,21 +1097,29 @@ bool MainWindow::parseKeyValueFloat(const QString &line, const QString &key, dou
     *value = v;
     return true;
 }
+}
 
 void MainWindow::handleTelemetryLine(const QString &line)
 {
     double mechDeg = 0.0;
     double appDeg = 0.0;
     double iqAmp = 0.0;
+    double iqRefAmp = 0.0;
     double idAmp = 0.0;
     double speedRpm = 0.0;
-    const bool hasMech = parseKeyValueFloat(line, QStringLiteral("MECH"), &mechDeg);
-    const bool hasApp = parseKeyValueFloat(line, QStringLiteral("APP"), &appDeg);
-    const bool hasIq = parseKeyValueFloat(line, QStringLiteral("IQ"), &iqAmp) ||
-                       parseKeyValueFloat(line, QStringLiteral("IQR"), &iqAmp);
-    const bool hasId = parseKeyValueFloat(line, QStringLiteral("ID"), &idAmp);
-    const bool hasSpeed = parseKeyValueFloat(line, QStringLiteral("SPEED"), &speedRpm) ||
-                          parseKeyValueFloat(line, QStringLiteral("SPD"), &speedRpm);
+    double speedMeasRpm = 0.0;
+    double speedErrRpm = 0.0;
+    const bool hasMech = parseKeyValueFloatFast(line, "MECH", &mechDeg);
+    const bool hasApp = parseKeyValueFloatFast(line, "APP", &appDeg);
+    const bool hasIq = parseKeyValueFloatFast(line, "IQ", &iqAmp);
+    const bool hasIqRef = parseKeyValueFloatFast(line, "IQR", &iqRefAmp);
+    const bool hasId = parseKeyValueFloatFast(line, "ID", &idAmp);
+    const bool hasSpeedMeas = parseKeyValueFloatFast(line, "SPMR", &speedMeasRpm);
+    const bool hasSpeedErr = parseKeyValueFloatFast(line, "SPER", &speedErrRpm);
+    const bool hasSpeed = parseKeyValueFloatFast(line, "SPEED", &speedRpm) ||
+                          parseKeyValueFloatFast(line, "SPD", &speedRpm);
+    const bool hasAnyTelemetry = hasMech || hasApp || hasIq || hasIqRef || hasId || hasSpeed ||
+                                 hasSpeedMeas || hasSpeedErr;
 
     if (hasMech || hasApp)
     {
@@ -709,9 +1134,21 @@ void MainWindow::handleTelemetryLine(const QString &line)
     {
         m_lastIqAmp = iqAmp;
     }
+    if (hasIqRef)
+    {
+        m_lastIqRefAmp = iqRefAmp;
+    }
     if (hasId)
     {
         m_lastIdAmp = idAmp;
+    }
+    if (hasSpeedMeas)
+    {
+        m_lastSpeedMeasPu = speedMeasRpm;
+    }
+    if (hasSpeedErr)
+    {
+        m_lastSpeedErrorPu = speedErrRpm;
     }
 
     if (hasSpeed || hasIq || hasId)
@@ -719,7 +1156,75 @@ void MainWindow::handleTelemetryLine(const QString &line)
         updateSpeed(m_lastSpeedRpm, m_lastIqAmp, m_lastIdAmp);
     }
 
-    if (hasMech || hasApp || hasIq || hasSpeed)
+    if (hasIqRef)
+    {
+        if (m_iqRefStatus != nullptr)
+        {
+            m_iqRefStatus->setText(fmt6(iqRefAmp));
+        }
+        if (m_iqRefDetailLabel != nullptr)
+        {
+            m_iqRefDetailLabel->setText(tr("IQR: %1 A").arg(fmt6(iqRefAmp)));
+        }
+        if (m_iqRefLink != nullptr)
+        {
+            m_iqRefLink->setText(tr("Telemetry OK"));
+        }
+        const qint64 x = m_iqRefSampleIndex;
+        m_iqRefPoints.append(QPointF(x, iqRefAmp));
+        ++m_iqRefSampleIndex;
+        trimPointBuffer(m_iqRefPoints, 7200);
+        if (m_iqRefTimeSlider != nullptr)
+        {
+            const int maxOffset = qMax(0, m_iqRefPoints.size() - 1);
+            m_iqRefTimeSlider->setRange(0, maxOffset);
+            if (m_iqRefAutoFollow)
+            {
+                m_iqRefTimeSlider->blockSignals(true);
+                m_iqRefTimeSlider->setValue(qMax(0, m_iqRefPoints.size() - m_iqRefWindowSize));
+                m_iqRefTimeSlider->blockSignals(false);
+            }
+        }
+        m_lastIqRefUiTick = QDateTime::currentMSecsSinceEpoch();
+        refreshIqRefChart();
+    }
+
+    if (hasSpeedMeas || hasSpeedErr)
+    {
+        const qint64 x = m_speedMeasSampleIndex;
+        m_speedMeasPoints.append(QPointF(x, speedMeasRpm));
+        m_speedErrPoints.append(QPointF(x, speedErrRpm));
+        ++m_speedMeasSampleIndex;
+        trimPointBuffer(m_speedMeasPoints, 7200);
+        trimPointBuffer(m_speedErrPoints, 7200);
+        if (m_speedMeasTimeSlider != nullptr)
+        {
+            const int maxOffset = qMax(0, m_speedMeasPoints.size() - 1);
+            m_speedMeasTimeSlider->setRange(0, maxOffset);
+            if (m_speedMeasAutoFollow)
+            {
+                m_speedMeasTimeSlider->blockSignals(true);
+                m_speedMeasTimeSlider->setValue(qMax(0, m_speedMeasPoints.size() - m_speedMeasWindowSize));
+                m_speedMeasTimeSlider->blockSignals(false);
+            }
+        }
+        if (m_speedMeasStatus != nullptr)
+        {
+            m_speedMeasStatus->setText(fmt6(speedMeasRpm));
+        }
+        if (m_speedMeasDetailLabel != nullptr)
+        {
+            m_speedMeasDetailLabel->setText(tr("SpeedMeas: %1 rpm | SpeedErr: %2 rpm").arg(fmt6(speedMeasRpm), fmt6(speedErrRpm)));
+        }
+        if (m_speedMeasLink != nullptr)
+        {
+            m_speedMeasLink->setText(tr("Telemetry OK"));
+        }
+        m_lastSpeedMeasUiTick = QDateTime::currentMSecsSinceEpoch();
+        refreshSpeedMeasChart();
+    }
+
+    if (hasAnyTelemetry)
     {
         m_lastTelemetryTick = QDateTime::currentMSecsSinceEpoch();
         if (m_statusLink != nullptr)
@@ -741,12 +1246,8 @@ void MainWindow::updateAngle(double mechDeg, double appDeg)
     m_angleAppPoints.append(QPointF(x, appDeg));
     ++m_sampleIndex;
 
-    constexpr int kMaxPoints = 7200;
-    while (m_angleMechPoints.size() > kMaxPoints)
-    {
-        m_angleMechPoints.removeFirst();
-        m_angleAppPoints.removeFirst();
-    }
+    trimPointBuffer(m_angleMechPoints, 7200);
+    trimPointBuffer(m_angleAppPoints, 7200);
 
     if (m_angleTimeSlider != nullptr)
     {
@@ -795,13 +1296,9 @@ void MainWindow::updateSpeed(double speedRpm, double iqAmp, double idAmp)
     m_speedIdPoints.append(QPointF(x, idAmp));
     ++m_speedSampleIndex;
 
-    constexpr int kMaxPoints = 7200;
-    while (m_speedPoints.size() > kMaxPoints)
-    {
-        m_speedPoints.removeFirst();
-        m_speedIqPoints.removeFirst();
-        m_speedIdPoints.removeFirst();
-    }
+    trimPointBuffer(m_speedPoints, 7200);
+    trimPointBuffer(m_speedIqPoints, 7200);
+    trimPointBuffer(m_speedIdPoints, 7200);
 
     if (m_speedTimeSlider != nullptr)
     {
@@ -922,26 +1419,139 @@ void MainWindow::refreshSpeedChart()
     m_speedAxisY->setTickCount(11);
     m_speedAxisY->setLabelFormat("%.0f");
 
-    if (!m_speedIqPoints.isEmpty())
+    m_speedAxisIq->setRange(-0.5, 0.5);
+    m_speedAxisIq->setTickCount(7);
+    m_speedAxisIq->setLabelFormat("%.3f");
+
+    if (size > 0)
     {
         double minIq = m_speedIqPoints[startIndex].y();
         double maxIq = minIq;
+        double minId = m_speedIdPoints[startIndex].y();
+        double maxId = minId;
         for (int i = startIndex; i < endIndex; ++i)
         {
             minIq = qMin(minIq, m_speedIqPoints[i].y());
             maxIq = qMax(maxIq, m_speedIqPoints[i].y());
+            minId = qMin(minId, m_speedIdPoints[i].y());
+            maxId = qMax(maxId, m_speedIdPoints[i].y());
         }
 
-        Q_UNUSED(minIq);
-        Q_UNUSED(maxIq);
-        m_speedAxisIq->setRange(-0.5, 0.5);
+        const double peakIqHigh = maxIq;
+        const double peakIqLow = minIq;
+        const double peakIdHigh = maxId;
+        const double peakIdLow = minId;
+        if (m_speedPeakLabel != nullptr)
+        {
+            m_speedPeakLabel->setText(tr("ID: [%1, %2] A | IQ: [%3, %4] A")
+                                          .arg(fmt6(peakIdLow), fmt6(peakIdHigh), fmt6(peakIqLow), fmt6(peakIqHigh)));
+        }
+    }
+}
+
+void MainWindow::refreshSpeedMeasChart()
+{
+    if (m_speedMeasSeries == nullptr || m_speedErrSeries == nullptr || m_speedMeasAxisX == nullptr || m_speedMeasAxisY == nullptr || m_speedErrAxis == nullptr)
+    {
+        return;
+    }
+
+    const int count = m_speedMeasPoints.size();
+    if (count <= 0)
+    {
+        m_speedMeasSeries->clear();
+        m_speedErrSeries->clear();
+        return;
+    }
+
+    const int startIndex = qBound(0, m_speedMeasTimeSlider != nullptr ? m_speedMeasTimeSlider->value() : 0, qMax(0, count - 1));
+    const int endIndex = qMin(count, startIndex + m_speedMeasWindowSize);
+    const int size = qMax(0, endIndex - startIndex);
+
+    m_speedMeasSeries->replace(m_speedMeasPoints.mid(startIndex, size));
+    m_speedErrSeries->replace(m_speedErrPoints.mid(startIndex, size));
+    m_speedMeasAxisX->setRange(startIndex, qMax(startIndex + 1, endIndex - 1));
+    m_speedMeasAxisX->setLabelFormat("%.0f");
+
+    if (size > 0 && m_speedMeasPeakLabel != nullptr)
+    {
+        double minMeas = m_speedMeasPoints[startIndex].y();
+        double maxMeas = minMeas;
+        double minErr = m_speedErrPoints[startIndex].y();
+        double maxErr = minErr;
+        for (int i = startIndex; i < endIndex; ++i)
+        {
+            minMeas = qMin(minMeas, m_speedMeasPoints[i].y());
+            maxMeas = qMax(maxMeas, m_speedMeasPoints[i].y());
+            minErr = qMin(minErr, m_speedErrPoints[i].y());
+            maxErr = qMax(maxErr, m_speedErrPoints[i].y());
+        }
+
+        const double measSpan = qMax(1.0, maxMeas - minMeas);
+        const double measMargin = qMax(1.0, measSpan * 0.25);
+        const double measMin = minMeas - measMargin;
+        const double measMax = maxMeas + measMargin;
+        m_speedMeasAxisY->setRange(measMin, measMax);
+        m_speedMeasAxisY->setTickCount(9);
+        m_speedMeasAxisY->setLabelFormat("%.0f");
+
+        const double errSpan = qMax(0.05, maxErr - minErr);
+        const double errMargin = qMax(0.05, errSpan * 0.25);
+        const double errMin = minErr - errMargin;
+        const double errMax = maxErr + errMargin;
+        m_speedErrAxis->setRange(errMin, errMax);
+        m_speedErrAxis->setTickCount(9);
+        m_speedErrAxis->setLabelFormat("%.3f");
+
+        m_speedMeasPeakLabel->setText(tr("SpeedMeas: [%1, %2] rpm | SpeedErr: [%3, %4] rpm")
+                                          .arg(fmt6(minMeas), fmt6(maxMeas), fmt6(minErr), fmt6(maxErr)));
     }
     else
     {
-        m_speedAxisIq->setRange(-0.5, 0.5);
+        m_speedMeasAxisY->setRange(-1.0, 1.0);
+        m_speedMeasAxisY->setTickCount(9);
+        m_speedMeasAxisY->setLabelFormat("%.0f");
+        m_speedErrAxis->setRange(-1.0, 1.0);
+        m_speedErrAxis->setTickCount(9);
+        m_speedErrAxis->setLabelFormat("%.3f");
     }
-    m_speedAxisIq->setTickCount(7);
-    m_speedAxisIq->setLabelFormat("%.3f");
+}
+
+void MainWindow::refreshIqRefChart()
+{
+    if (m_iqRefSeries == nullptr || m_iqRefAxisX == nullptr || m_iqRefAxisY == nullptr)
+    {
+        return;
+    }
+
+    const qint64 x = m_iqRefSampleIndex;
+    if (m_iqRefPoints.isEmpty() || m_lastTelemetryTick == 0)
+    {
+        return;
+    }
+
+    const int count = m_iqRefPoints.size();
+    const int startIndex = qBound(0, m_iqRefTimeSlider != nullptr ? m_iqRefTimeSlider->value() : 0, qMax(0, count - 1));
+    const int endIndex = qMin(count, startIndex + m_iqRefWindowSize);
+    const int size = qMax(0, endIndex - startIndex);
+    m_iqRefSeries->replace(m_iqRefPoints.mid(startIndex, size));
+    m_iqRefAxisX->setRange(startIndex, qMax(startIndex + 1, endIndex - 1));
+    m_iqRefAxisX->setLabelFormat("%.0f");
+    m_iqRefAxisY->setRange(-2.5, 2.5);
+    m_iqRefAxisY->setTickCount(11);
+    m_iqRefAxisY->setLabelFormat("%.3f");
+
+    if (size > 0 && m_iqRefPeakLabel != nullptr)
+    {
+        double minIqRef = m_iqRefPoints[startIndex].y();
+        double maxIqRef = minIqRef;
+        for (int i = startIndex; i < endIndex; ++i)
+        {
+            minIqRef = qMin(minIqRef, m_iqRefPoints[i].y());
+            maxIqRef = qMax(maxIqRef, m_iqRefPoints[i].y());
+        }
+        m_iqRefPeakLabel->setText(tr("IQR: [%1, %2] A").arg(fmt6(minIqRef), fmt6(maxIqRef)));
+    }
 }
 
 void MainWindow::zoomAngleWindow(int delta)
@@ -956,6 +1566,20 @@ void MainWindow::zoomSpeedWindow(int delta)
     m_speedWindowSize = qBound(100, m_speedWindowSize + delta, 6000);
     m_speedAutoFollow = false;
     refreshSpeedChart();
+}
+
+void MainWindow::zoomIqRefWindow(int delta)
+{
+    m_iqRefWindowSize = qBound(100, m_iqRefWindowSize + delta, 6000);
+    m_iqRefAutoFollow = false;
+    refreshIqRefChart();
+}
+
+void MainWindow::zoomSpeedMeasWindow(int delta)
+{
+    m_speedMeasWindowSize = qBound(100, m_speedMeasWindowSize + delta, 6000);
+    m_speedMeasAutoFollow = false;
+    refreshSpeedMeasChart();
 }
 
 void MainWindow::resetAngleWindow()
@@ -977,8 +1601,43 @@ void MainWindow::resetSpeedWindow()
     {
         m_speedTimeSlider->setValue(qMax(0, m_speedPoints.size() - m_speedWindowSize));
     }
+    if (m_speedPeakLabel != nullptr)
+    {
+        m_speedPeakLabel->setText(tr("ID: [0.000000, 0.000000] A | IQ: [0.000000, 0.000000] A"));
+    }
     refreshSpeedChart();
 }
+
+void MainWindow::resetIqRefWindow()
+{
+    m_iqRefWindowSize = 1800;
+    m_iqRefAutoFollow = true;
+    if (m_iqRefTimeSlider != nullptr)
+    {
+        m_iqRefTimeSlider->setValue(qMax(0, m_iqRefPoints.size() - m_iqRefWindowSize));
+    }
+    if (m_iqRefPeakLabel != nullptr)
+    {
+        m_iqRefPeakLabel->setText(tr("IQR: [0.000000, 0.000000] A"));
+    }
+    refreshIqRefChart();
+}
+
+void MainWindow::resetSpeedMeasWindow()
+{
+    m_speedMeasWindowSize = 1800;
+    m_speedMeasAutoFollow = true;
+    if (m_speedMeasTimeSlider != nullptr)
+    {
+        m_speedMeasTimeSlider->setValue(qMax(0, m_speedMeasPoints.size() - m_speedMeasWindowSize));
+    }
+    if (m_speedMeasPeakLabel != nullptr)
+    {
+        m_speedMeasPeakLabel->setText(tr("SPMR: [0.000000, 0.000000] rpm | SPER: [0.000000, 0.000000] rpm"));
+    }
+    refreshSpeedMeasChart();
+}
+
 void MainWindow::appendLog(const QString &text)
 {
     m_logEdit->append(text);

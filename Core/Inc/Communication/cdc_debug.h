@@ -20,6 +20,10 @@ typedef struct
     float position_app_pu;
     float position_app_deg;
     float speed_rpm;
+    float speed_meas_rpm;
+    float speed_error_rpm;
+    float speed_meas_pu;
+    float speed_error_pu;
     float current_d_a;
     float current_q_a;
     float current_ref_q_a;

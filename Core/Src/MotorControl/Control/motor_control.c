@@ -62,8 +62,8 @@ void PID_All_Init()
 	PIDREG_SPEED_init(&g_axis.speedCtrl.PIDSpeed, CURRENT_SCALE, FREQUENCY_SCALE, SPEED_CONTROL_RATE);
 	PIDREG_SPEED_setOutputLimits(&g_axis.speedCtrl.PIDSpeed, currentLimit_pu, -currentLimit_pu);
 
-	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 0.7f);
-	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 0.1f);
+	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 8.0f);
+	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 0.0f);
 }
 
 /**
@@ -159,8 +159,8 @@ uint16_t FOC_Control(void)
 	if (iSpeedCount == SPEED_CONTROL_COUNT)
 	{
 		 Speed_Control(&g_axis.speedCtrl, g_axis.enCtrlMode);
-		 g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
-		//g_axis.currCtrl.refIdq.Q = FIXP30(0.001f);   // 你想要的固定力矩电流
+		// g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
+		g_axis.currCtrl.refIdq.Q = FIXP30(0.01f);   // 你想要的固定力矩电流
 		iSpeedCount = 0;
 	}
 

@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QPointF>
+#include <QtCharts/QChartView>
 #include <QTimer>
 #include <QVector>
 
@@ -21,8 +22,9 @@ class QToolButton;
 class QTextEdit;
 class QPlainTextEdit;
 class QTabWidget;
-class QChartView;
+class QChart;
 class QValueAxis;
+class QMouseEvent;
 
 class MainWindow : public QMainWindow
 {
@@ -41,10 +43,22 @@ private slots:
     void pollSerial();
 
 private:
+    class ChartView : public QChartView
+    {
+    public:
+        explicit ChartView(QWidget *parent = nullptr);
+
+    protected:
+        void mousePressEvent(QMouseEvent *event) override;
+        void mouseMoveEvent(QMouseEvent *event) override;
+    };
+
     void setupUi();
     void setupControlPage(QWidget *page);
     void setupAnglePage(QWidget *page);
     void setupSpeedPage(QWidget *page);
+    void setupIqRefPage(QWidget *page);
+    void setupSpeedMeasPage(QWidget *page);
     void setupDebugPage(QWidget *page);
     void appendLog(const QString &text);
     void appendDebug(const QString &text);
@@ -55,12 +69,16 @@ private:
     void updateSpeed(double speedRpm, double iqAmp, double idAmp);
     void refreshAngleChart();
     void refreshSpeedChart();
+    void refreshIqRefChart();
+    void refreshSpeedMeasChart();
     void zoomAngleWindow(int delta);
     void zoomSpeedWindow(int delta);
+    void zoomIqRefWindow(int delta);
+    void zoomSpeedMeasWindow(int delta);
     void resetAngleWindow();
     void resetSpeedWindow();
-    static bool parseKeyValueFloat(const QString &line, const QString &key, double *value);
-
+    void resetIqRefWindow();
+    void resetSpeedMeasWindow();
     QTimer m_refreshTimer;
     QTimer m_pollTimer;
     SerialBackend m_serial;
@@ -69,6 +87,8 @@ private:
     QWidget *m_controlPage = nullptr;
     QWidget *m_anglePage = nullptr;
     QWidget *m_speedPage = nullptr;
+    QWidget *m_iqRefPage = nullptr;
+    QWidget *m_speedMeasPage = nullptr;
     QWidget *m_debugPage = nullptr;
 
     QComboBox *m_portCombo = nullptr;
@@ -132,11 +152,57 @@ private:
     QLabel *m_statusSpeed = nullptr;
     QLabel *m_speedLink = nullptr;
     QLabel *m_speedDetailLabel = nullptr;
+    QLabel *m_speedPeakLabel = nullptr;
     QSlider *m_speedTimeSlider = nullptr;
     QToolButton *m_speedZoomInButton = nullptr;
     QToolButton *m_speedZoomOutButton = nullptr;
     QToolButton *m_speedZoomResetButton = nullptr;
     bool m_speedSliderDragging = false;
+
+    QChartView *m_iqRefChartView = nullptr;
+    QLineSeries *m_iqRefSeries = nullptr;
+    QValueAxis *m_iqRefAxisX = nullptr;
+    QValueAxis *m_iqRefAxisY = nullptr;
+    QLabel *m_iqRefStatus = nullptr;
+    QLabel *m_iqRefLink = nullptr;
+    QLabel *m_iqRefDetailLabel = nullptr;
+    QLabel *m_iqRefPeakLabel = nullptr;
+    QSlider *m_iqRefTimeSlider = nullptr;
+    QToolButton *m_iqRefZoomInButton = nullptr;
+    QToolButton *m_iqRefZoomOutButton = nullptr;
+    QToolButton *m_iqRefZoomResetButton = nullptr;
+    bool m_iqRefSliderDragging = false;
+    QVector<QPointF> m_iqRefPoints;
+    qint64 m_iqRefSampleIndex = 0;
+    int m_iqRefWindowSize = 1800;
+    bool m_iqRefAutoFollow = true;
+    double m_lastIqRefAmp = 0.0;
+    qint64 m_lastIqRefUiTick = 0;
+
+    QChartView *m_speedMeasChartView = nullptr;
+    QLineSeries *m_speedMeasSeries = nullptr;
+    QLineSeries *m_speedErrSeries = nullptr;
+    QValueAxis *m_speedMeasAxisX = nullptr;
+    QValueAxis *m_speedMeasAxisY = nullptr;
+    QValueAxis *m_speedErrAxis = nullptr;
+    QLabel *m_speedMeasStatus = nullptr;
+    QLabel *m_speedMeasLink = nullptr;
+    QLabel *m_speedMeasDetailLabel = nullptr;
+    QLabel *m_speedMeasPeakLabel = nullptr;
+    QSlider *m_speedMeasTimeSlider = nullptr;
+    QToolButton *m_speedMeasZoomInButton = nullptr;
+    QToolButton *m_speedMeasZoomOutButton = nullptr;
+    QToolButton *m_speedMeasZoomResetButton = nullptr;
+    bool m_speedMeasSliderDragging = false;
+    QVector<QPointF> m_speedMeasPoints;
+    QVector<QPointF> m_speedErrPoints;
+    qint64 m_speedMeasSampleIndex = 0;
+    int m_speedMeasWindowSize = 1800;
+    bool m_speedMeasAutoFollow = true;
+    double m_lastSpeedMeasPu = 0.0;
+    double m_lastSpeedErrorPu = 0.0;
+    qint64 m_lastSpeedMeasUiTick = 0;
+
     QVector<QPointF> m_speedPoints;
     QVector<QPointF> m_speedIqPoints;
     QVector<QPointF> m_speedIdPoints;
@@ -157,6 +223,7 @@ private:
     qint64 m_lastTelemetryTick = 0;
     int m_angleWindowSize = 1800;
     QString m_rxLineBuffer;
+    QPointF m_lastMousePos;
 };
 
 #endif // MAINWINDOW_H

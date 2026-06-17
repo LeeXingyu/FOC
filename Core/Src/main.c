@@ -153,6 +153,7 @@ int main(void)
     HAL_Delay(1000);
     LAN9253_Init();
   }
+
 #endif
   
   /* USER CODE END 2 */
