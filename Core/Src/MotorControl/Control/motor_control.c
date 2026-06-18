@@ -62,8 +62,8 @@ void PID_All_Init()
 	PIDREG_SPEED_init(&g_axis.speedCtrl.PIDSpeed, CURRENT_SCALE, FREQUENCY_SCALE, SPEED_CONTROL_RATE);
 	PIDREG_SPEED_setOutputLimits(&g_axis.speedCtrl.PIDSpeed, currentLimit_pu, -currentLimit_pu);
 
-	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 8.0f);
-	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 0.0f);
+	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 3.0f);
+	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 1.5f);
 }
 
 /**
@@ -159,8 +159,8 @@ uint16_t FOC_Control(void)
 	if (iSpeedCount == SPEED_CONTROL_COUNT)
 	{
 		 Speed_Control(&g_axis.speedCtrl, g_axis.enCtrlMode);
-		// g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
-		g_axis.currCtrl.refIdq.Q = FIXP30(0.01f);   // 你想要的固定力矩电流
+		 g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
+		//g_axis.currCtrl.refIdq.Q = FIXP30(0.2f);   // 你想要的固定力矩电流
 		iSpeedCount = 0;
 	}
 
@@ -256,12 +256,32 @@ void Speed_Control(SpeedCtrl_t *pSpeedCtrl, ControlMode_En enControlMode)
 		pSpeedCtrl->speedRefRamp_pu = pSpeedCtrl->speedRef_pu;
 	}
 
-
 	fixp30_t speedError = pSpeedCtrl->speedRefRamp_pu - pSpeedCtrl->speedMeas_pu;
 	fixp30_t IqRef_pu = PIDREG_SPEED_run(&pSpeedCtrl->PIDSpeed, speedError);
 
 	fixp30_t IqRefCircleMax = FIXP30(12.0 / CURRENT_SCALE);
 	IqRef_pu = FIXP_sat(IqRef_pu, IqRefCircleMax, -IqRefCircleMax);
+
+#if SPEED_TORQUE_COMP_ENABLE
+	{
+		fixp30_t compIq_pu = FIXP30(0.0f);
+		fixp30_t absSpeedRef_pu = FIXP_abs(pSpeedCtrl->speedRefRamp_pu);
+
+		if (absSpeedRef_pu <= FIXP30(SPEED_TORQUE_COMP_SPEED_PU))
+		{
+			if (pSpeedCtrl->speedRefRamp_pu > FIXP30(0.0f))
+			{
+				compIq_pu = FIXP30(SPEED_TORQUE_COMP_IQ_PU);
+			}
+			else if (pSpeedCtrl->speedRefRamp_pu < FIXP30(0.0f))
+			{
+				compIq_pu = -FIXP30(SPEED_TORQUE_COMP_IQ_PU);
+			}
+		}
+
+		IqRef_pu += compIq_pu;
+	}
+#endif
 
 	pSpeedCtrl->iqOut_pu = FIXP_sat(IqRef_pu, IqRefCircleMax, -IqRefCircleMax);
 }

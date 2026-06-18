@@ -16,9 +16,7 @@
  * 1: 使用 angle-based speed observer
  * 0: 回退到连续差分测速
  */
-#ifndef SPEED_MEAS_USE_ANGLE_OBSERVER
-#define SPEED_MEAS_USE_ANGLE_OBSERVER 1
-#endif
+/* speed measurement mode is selected by SPEED_MEAS_MODE in motor_parameters.h */
 
 /**
  * @brief  圈数量计算

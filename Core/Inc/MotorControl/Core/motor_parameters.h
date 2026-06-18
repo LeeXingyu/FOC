@@ -20,6 +20,45 @@
 #define SPEED_CONTROL_COUNT                 32
 #define POSITION_CONTROL_COUNT              16
 
+/*
+ * Speed measurement mode:
+ * 0: current angle-observer / Kalman path
+ * 1: PLL observer path
+ */
+#define SPEED_MEAS_MODE_KALMAN              0U
+#define SPEED_MEAS_MODE_PLL                 1U
+
+#ifndef SPEED_MEAS_MODE
+#define SPEED_MEAS_MODE                     SPEED_MEAS_MODE_PLL
+#endif
+
+/*
+ * PLL observer tuning.
+ * These values are only used when SPEED_MEAS_USE_PLL_OBSERVER == 1.
+ */
+#define SPEED_PLL_KP                        1.2f
+#define SPEED_PLL_KI                        3.50f
+#define SPEED_PLL_MAX_RPM                   3000.0f
+#define SPEED_PLL_OUTPUT_LPF_ALPHA          0.04f
+
+/*
+ * Low-speed torque compensation.
+ * Added to speed-loop Iq output with direction sign following speed command.
+ */
+#ifndef SPEED_TORQUE_COMP_ENABLE
+#define SPEED_TORQUE_COMP_ENABLE            1U
+#endif
+/*
+ * Human-friendly tuning units:
+ * - SPEED_TORQUE_COMP_IQ_A: compensation current in ampere
+ * - SPEED_TORQUE_COMP_SPEED_RPM: compensation active below this mechanical speed
+ */
+#define SPEED_TORQUE_COMP_IQ_A              0.2f
+#define SPEED_TORQUE_COMP_SPEED_RPM         40.0f
+
+#define SPEED_TORQUE_COMP_IQ_PU             (SPEED_TORQUE_COMP_IQ_A / CURRENT_SCALE)
+#define SPEED_TORQUE_COMP_SPEED_PU          (((SPEED_TORQUE_COMP_SPEED_RPM) * (float_t)POLE_PAIR_NUM / 60.0f) / FREQUENCY_SCALE)
+
 #define RSHUNT                              0.005f
 #define ADC_REFERENCE_VOLTAGE               3.3f
 #define AMPLIFICATION_GAIN                  40

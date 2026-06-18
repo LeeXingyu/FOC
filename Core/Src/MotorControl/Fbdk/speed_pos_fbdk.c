@@ -21,6 +21,51 @@ static bool s_angleObserverValid = false;
 static float s_speedWindowDeg[SPEED_MEAS_WINDOW_SAMPLES] = {0.0f};
 static uint8_t s_speedWindowIdx = 0U;
 static uint8_t s_speedWindowValid = 0U;
+static float s_pllAnglePu = 0.0f;
+static float s_pllFreqHz = 0.0f;
+static float s_pllSpeedFilteredRpm = 0.0f;
+static bool s_pllValid = false;
+
+static float SpeedPos_WrapTurn(float anglePu)
+{
+    while (anglePu >= 1.0f)
+    {
+        anglePu -= 1.0f;
+    }
+    while (anglePu < 0.0f)
+    {
+        anglePu += 1.0f;
+    }
+    return anglePu;
+}
+
+static float SpeedPos_WrapErrorTurn(float errorPu)
+{
+    if (errorPu > 0.5f)
+    {
+        errorPu -= 1.0f;
+    }
+    else if (errorPu < -0.5f)
+    {
+        errorPu += 1.0f;
+    }
+    return errorPu;
+}
+
+static void SpeedPos_ResetPllState(uint32_t rawNative, uint32_t counts)
+{
+    float anglePu = 0.0f;
+
+    if (counts > 1U)
+    {
+        anglePu = (float)rawNative / (float)counts;
+    }
+
+    s_pllAnglePu = SpeedPos_WrapTurn(anglePu);
+    s_pllFreqHz = 0.0f;
+    s_pllSpeedFilteredRpm = 0.0f;
+    s_pllValid = true;
+}
 
 static uint32_t SpeedPos_GetNativeCounts(void)
 {
@@ -260,7 +305,7 @@ void Sensor_Update_Kalman(void)
         return;
     }
 
-#if SPEED_MEAS_USE_ANGLE_OBSERVER
+#if (SPEED_MEAS_MODE == SPEED_MEAS_MODE_KALMAN)
     {
         float angleDeg = SpeedPos_GetAngleDeg(curRawNative, counts);
         float rawRpm;
@@ -320,6 +365,7 @@ void Calc_Speed(fixp30_t *pSpeed)
 {
     uint32_t rawNative;
     float fElectricalFreqHz;
+    float speedRpm;
 
     if (pSpeed == NULL)
     {
@@ -331,31 +377,48 @@ void Calc_Speed(fixp30_t *pSpeed)
     if (!g_axis.posCtrl.bCalibFlag)
     {
         g_axis.fbdk.fSpeedKalman = 0.0f;
+        g_axis.fbdk.fSpeedPll = 0.0f;
         SpeedPos_ResetCircleHistory(rawNative);
         SpeedPos_ResetSpeedHistory(rawNative);
         s_speedObserverRpm = 0.0f;
         s_angleObserverValid = false;
+        s_pllValid = false;
+        s_pllAnglePu = 0.0f;
+        s_pllFreqHz = 0.0f;
+        s_pllSpeedFilteredRpm = 0.0f;
         *pSpeed = FIXP30(0.0f);
         return;
     }
 
+#if (SPEED_MEAS_MODE == SPEED_MEAS_MODE_PLL)
+    Sensor_Update_PLL();
+    speedRpm = g_axis.fbdk.fSpeedPll;
+#else
     Circle_Update();
     Sensor_Update_Kalman();
+    speedRpm = g_axis.fbdk.fSpeedKalman;
+#endif
 
-    fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * g_axis.fbdk.fSpeedKalman) / 60.0f;
+    fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * speedRpm) / 60.0f;
     *pSpeed = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
 }
 
 void Get_Speed(fixp30_t *pSpeed)
 {
     float fElectricalFreqHz;
+    float speedRpm;
 
     if (pSpeed == NULL)
     {
         return;
     }
 
-    fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * g_axis.fbdk.fSpeedKalman) / 60.0f;
+#if (SPEED_MEAS_MODE == SPEED_MEAS_MODE_PLL)
+    speedRpm = g_axis.fbdk.fSpeedPll;
+#else
+    speedRpm = g_axis.fbdk.fSpeedKalman;
+#endif
+    fElectricalFreqHz = ((float)MC_Get_Pole_Pairs() * speedRpm) / 60.0f;
     *pSpeed = FIXP30(fElectricalFreqHz / FREQUENCY_SCALE);
 }
 
@@ -428,16 +491,76 @@ void Sensor_Update(void)
 
 void Sensor_Update_PLL(void)
 {
+    uint32_t curRawNative;
+    uint32_t counts;
+    float anglePu;
+    float phaseErrorPu;
+    float freqHz;
+    float speedRpm;
+
+    curRawNative = Get_Angle_RawNative();
+    counts = SpeedPos_GetNativeCounts();
+
+    if (!g_axis.posCtrl.bCalibFlag || (counts <= 1U))
+    {
+        g_axis.fbdk.fSpeedPll = 0.0f;
+        g_axis.fbdk.fSpeedKalman = 0.0f;
+        s_pllValid = false;
+        s_pllAnglePu = 0.0f;
+        s_pllFreqHz = 0.0f;
+        s_pllSpeedFilteredRpm = 0.0f;
+        return;
+    }
+
+    anglePu = SpeedPos_WrapTurn((float)curRawNative / (float)counts);
+
+    if (!s_pllValid)
+    {
+        SpeedPos_ResetPllState(curRawNative, counts);
+        g_axis.fbdk.fSpeedPll = 0.0f;
+        g_axis.fbdk.fSpeedKalman = 0.0f;
+        return;
+    }
+
+    phaseErrorPu = SpeedPos_WrapErrorTurn(anglePu - s_pllAnglePu);
+
+    /*
+     * Phase detector:
+     * - phaseErrorPu is normalized to one turn
+     * - proportional term adjusts the estimated angle
+     * - integral term adjusts the estimated speed
+     */
+    s_pllFreqHz += SPEED_PLL_KI * phaseErrorPu;
+    s_pllFreqHz = SpeedPos_ClampFloat(s_pllFreqHz, -SPEED_PLL_MAX_RPM / 60.0f, SPEED_PLL_MAX_RPM / 60.0f);
+
+    s_pllAnglePu = SpeedPos_WrapTurn(s_pllAnglePu + (s_pllFreqHz / SPEED_MEASUREMENT_RATE_HZ) + (SPEED_PLL_KP * phaseErrorPu));
+
+    speedRpm = s_pllFreqHz * 60.0f;
+    s_pllSpeedFilteredRpm += SPEED_PLL_OUTPUT_LPF_ALPHA * (speedRpm - s_pllSpeedFilteredRpm);
+
+    g_axis.fbdk.fSpeedPll = s_pllSpeedFilteredRpm;
+    g_axis.fbdk.fSpeedKalman = s_pllSpeedFilteredRpm;
 }
 
 void SpeedPos_ResetEstimator(void)
 {
     uint32_t rawNative = Get_Angle_RawNative();
+    uint32_t counts = SpeedPos_GetNativeCounts();
 
     g_axis.fbdk.fSpeedKalman = 0.0f;
+    g_axis.fbdk.fSpeedPll = 0.0f;
     SpeedPos_ResetCircleHistory(rawNative);
     SpeedPos_ResetSpeedHistory(rawNative);
     s_speedObserverRpm = 0.0f;
     s_prevAngleDeg = SpeedPos_GetAngleDeg(rawNative, SpeedPos_GetNativeCounts());
     s_angleObserverValid = false;
+    s_pllValid = false;
+    s_pllAnglePu = 0.0f;
+    s_pllFreqHz = 0.0f;
+    s_pllSpeedFilteredRpm = 0.0f;
+
+    if (counts > 1U)
+    {
+        SpeedPos_ResetPllState(rawNative, counts);
+    }
 }
