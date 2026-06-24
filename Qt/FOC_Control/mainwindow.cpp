@@ -235,7 +235,7 @@ void MainWindow::setupUi()
     m_tabs->addTab(m_controlPage, tr("Control"));
     m_tabs->addTab(m_anglePage, tr("Angle"));
     m_tabs->addTab(m_speedPage, tr("Speed"));
-    m_tabs->addTab(m_iqRefPage, tr("Iq Ref"));
+    m_tabs->addTab(m_iqRefPage, tr("Iq Compare"));
     m_tabs->addTab(m_speedMeasPage, tr("Speed Meas"));
     m_tabs->addTab(m_debugPage, tr("Debug"));
 
@@ -612,24 +612,47 @@ void MainWindow::setupIqRefPage(QWidget *page)
 {
     auto *root = new QVBoxLayout(page);
 
-    auto *statusGroup = new QGroupBox(tr("Iq Ref Value"), page);
+    auto *statusGroup = new QGroupBox(tr("Iq Compare"), page);
     auto *statusLayout = new QGridLayout(statusGroup);
+    m_iqMesStatus = new QLabel(tr("0.000000"), statusGroup);
+    m_iqMesLink = new QLabel(tr("Waiting telemetry..."), statusGroup);
+    m_iqMesDetailLabel = new QLabel(tr("IQ_mes: 0.000000 A"), statusGroup);
+    m_iqMesPeakLabel = new QLabel(tr("IQ: [0.000000, 0.000000] A"), statusGroup);
+    auto *iqRawLabel = new QLabel(tr("Iq_raw"), statusGroup);
+    m_iqRawStatus = new QLabel(tr("0.000000"), statusGroup);
+    m_iqRawLink = new QLabel(tr("Waiting telemetry..."), statusGroup);
     m_iqRefStatus = new QLabel(tr("0.000000"), statusGroup);
     m_iqRefLink = new QLabel(tr("Waiting telemetry..."), statusGroup);
-    m_iqRefDetailLabel = new QLabel(tr("IQR: 0.000000 A"), statusGroup);
+    m_iqRefDetailLabel = new QLabel(tr("Iq_ref: 0.000000 A"), statusGroup);
     m_iqRefPeakLabel = new QLabel(tr("IQR: [0.000000, 0.000000] A"), statusGroup);
-    statusLayout->addWidget(new QLabel(tr("Iq Ref"), statusGroup), 0, 0);
-    statusLayout->addWidget(m_iqRefStatus, 0, 1);
+    statusLayout->addWidget(new QLabel(tr("Iq_mes"), statusGroup), 0, 0);
+    statusLayout->addWidget(m_iqMesStatus, 0, 1);
     statusLayout->addWidget(new QLabel(tr("Link"), statusGroup), 0, 2);
-    statusLayout->addWidget(m_iqRefLink, 0, 3);
-    statusLayout->addWidget(m_iqRefDetailLabel, 1, 0, 1, 4);
-    statusLayout->addWidget(m_iqRefPeakLabel, 2, 0, 1, 4);
+    statusLayout->addWidget(m_iqMesLink, 0, 3);
+    statusLayout->addWidget(iqRawLabel, 1, 0);
+    statusLayout->addWidget(m_iqRawStatus, 1, 1);
+    statusLayout->addWidget(new QLabel(tr("Link"), statusGroup), 1, 2);
+    statusLayout->addWidget(m_iqRawLink, 1, 3);
+    statusLayout->addWidget(new QLabel(tr("Iq_ref"), statusGroup), 2, 0);
+    statusLayout->addWidget(m_iqRefStatus, 2, 1);
+    statusLayout->addWidget(new QLabel(tr("Link"), statusGroup), 2, 2);
+    statusLayout->addWidget(m_iqRefLink, 2, 3);
+    statusLayout->addWidget(m_iqMesDetailLabel, 3, 0, 1, 4);
+    statusLayout->addWidget(m_iqRefDetailLabel, 4, 0, 1, 4);
+    statusLayout->addWidget(m_iqMesPeakLabel, 5, 0, 1, 4);
+    statusLayout->addWidget(m_iqRefPeakLabel, 6, 0, 1, 4);
 
-    auto *chartBox = new QGroupBox(tr("Iq Ref Trend"), page);
+    auto *chartBox = new QGroupBox(tr("Iq Compare Trend"), page);
     auto *layout = new QVBoxLayout(chartBox);
     auto *chart = new QChart();
+    m_iqMesSeries = new QLineSeries(page);
+    m_iqMesSeries->setName(tr("Iq_mes"));
+    chart->addSeries(m_iqMesSeries);
+    m_iqRawSeries = new QLineSeries(page);
+    m_iqRawSeries->setName(tr("Iq_raw"));
+    chart->addSeries(m_iqRawSeries);
     m_iqRefSeries = new QLineSeries(page);
-    m_iqRefSeries->setName(tr("Iq Ref"));
+    m_iqRefSeries->setName(tr("Iq_ref"));
     chart->addSeries(m_iqRefSeries);
     chart->createDefaultAxes();
     m_iqRefAxisX = qobject_cast<QValueAxis *>(chart->axes(Qt::Horizontal).first());
@@ -640,13 +663,13 @@ void MainWindow::setupIqRefPage(QWidget *page)
     }
     if (m_iqRefAxisY != nullptr)
     {
-        m_iqRefAxisY->setTitleText(tr("Iq Ref (A)"));
+        m_iqRefAxisY->setTitleText(tr("Iq (A)"));
         m_iqRefAxisY->setRange(-2.5, 2.5);
         m_iqRefAxisY->setTickCount(11);
         m_iqRefAxisY->setLabelFormat("%.3f");
     }
     chart->legend()->setVisible(true);
-    chart->setTitle(tr("Iq Ref Trend"));
+    chart->setTitle(tr("Iq Compare Trend"));
     m_iqRefChartView = new ChartView(chartBox);
     m_iqRefChartView->setChart(chart);
     m_iqRefChartView->setRenderHint(QPainter::Antialiasing);
@@ -955,7 +978,15 @@ void MainWindow::clearLog()
     {
         m_iqRefSeries->clear();
     }
+    if (m_iqRawSeries != nullptr)
+    {
+        m_iqRawSeries->clear();
+    }
+    m_iqMesPoints.clear();
+    m_iqRawPoints.clear();
     m_iqRefPoints.clear();
+    m_iqMesSampleIndex = 0;
+    m_iqRawSampleIndex = 0;
     m_iqRefSampleIndex = 0;
     if (m_iqRefTimeSlider != nullptr)
     {
@@ -1064,19 +1095,14 @@ bool parseKeyValueFloatFast(const QString &line, const char *key, double *value)
     }
 
     const QString keyStr = QString::fromLatin1(key);
-    const int keyPos = line.indexOf(keyStr, 0, Qt::CaseInsensitive);
+    const QString needle = keyStr + QLatin1Char('=');
+    const int keyPos = line.indexOf(needle, 0, Qt::CaseInsensitive);
     if (keyPos < 0)
     {
         return false;
     }
 
-    const int eqPos = line.indexOf('=', keyPos + keyStr.size());
-    if (eqPos < 0)
-    {
-        return false;
-    }
-
-    int endPos = eqPos + 1;
+    int endPos = keyPos + needle.size();
     while (endPos < line.size())
     {
         const QChar ch = line.at(endPos);
@@ -1088,7 +1114,7 @@ bool parseKeyValueFloatFast(const QString &line, const char *key, double *value)
     }
 
     bool ok = false;
-    const double v = line.mid(eqPos + 1, endPos - (eqPos + 1)).toDouble(&ok);
+    const double v = line.mid(keyPos + needle.size(), endPos - (keyPos + needle.size())).toDouble(&ok);
     if (!ok)
     {
         return false;
@@ -1104,6 +1130,7 @@ void MainWindow::handleTelemetryLine(const QString &line)
     double mechDeg = 0.0;
     double appDeg = 0.0;
     double iqAmp = 0.0;
+    double iqRawAmp = 0.0;
     double iqRefAmp = 0.0;
     double idAmp = 0.0;
     double speedRpm = 0.0;
@@ -1112,14 +1139,15 @@ void MainWindow::handleTelemetryLine(const QString &line)
     const bool hasMech = parseKeyValueFloatFast(line, "MECH", &mechDeg);
     const bool hasApp = parseKeyValueFloatFast(line, "APP", &appDeg);
     const bool hasIq = parseKeyValueFloatFast(line, "IQ", &iqAmp);
+    const bool hasIqRaw = parseKeyValueFloatFast(line, "IQRAW", &iqRawAmp);
     const bool hasIqRef = parseKeyValueFloatFast(line, "IQR", &iqRefAmp);
     const bool hasId = parseKeyValueFloatFast(line, "ID", &idAmp);
     const bool hasSpeedMeas = parseKeyValueFloatFast(line, "SPMR", &speedMeasRpm);
     const bool hasSpeedErr = parseKeyValueFloatFast(line, "SPER", &speedErrRpm);
     const bool hasSpeed = parseKeyValueFloatFast(line, "SPEED", &speedRpm) ||
                           parseKeyValueFloatFast(line, "SPD", &speedRpm);
-    const bool hasAnyTelemetry = hasMech || hasApp || hasIq || hasIqRef || hasId || hasSpeed ||
-                                 hasSpeedMeas || hasSpeedErr;
+    const bool hasAnyTelemetry = hasMech || hasApp || hasIq || hasIqRaw || hasIqRef || hasId || hasSpeed ||
+                                  hasSpeedMeas || hasSpeedErr;
 
     if (hasMech || hasApp)
     {
@@ -1133,6 +1161,10 @@ void MainWindow::handleTelemetryLine(const QString &line)
     if (hasIq)
     {
         m_lastIqAmp = iqAmp;
+    }
+    if (hasIqRaw)
+    {
+        m_lastIqRawAmp = iqRawAmp;
     }
     if (hasIqRef)
     {
@@ -1151,9 +1183,45 @@ void MainWindow::handleTelemetryLine(const QString &line)
         m_lastSpeedErrorPu = speedErrRpm;
     }
 
-    if (hasSpeed || hasIq || hasId)
+    if (hasSpeed || hasIq || hasIqRaw || hasId)
     {
         updateSpeed(m_lastSpeedRpm, m_lastIqAmp, m_lastIdAmp);
+    }
+
+    if (hasIq)
+    {
+        if (m_iqMesStatus != nullptr)
+        {
+            m_iqMesStatus->setText(fmt6(iqAmp));
+        }
+        if (m_iqMesDetailLabel != nullptr)
+        {
+            m_iqMesDetailLabel->setText(tr("Iq_mes: %1 A").arg(fmt6(iqAmp)));
+        }
+        if (m_iqMesLink != nullptr)
+        {
+            m_iqMesLink->setText(tr("Telemetry OK"));
+        }
+        const qint64 x = m_iqMesSampleIndex;
+        m_iqMesPoints.append(QPointF(x, iqAmp));
+        ++m_iqMesSampleIndex;
+        trimPointBuffer(m_iqMesPoints, 7200);
+    }
+    if (hasIqRaw)
+    {
+        if (m_iqRawStatus != nullptr)
+        {
+            m_iqRawStatus->setText(fmt6(iqRawAmp));
+        }
+        if (m_iqRawLink != nullptr)
+        {
+            m_iqRawLink->setText(tr("Telemetry OK"));
+        }
+        const qint64 x = m_iqRawSampleIndex;
+        m_iqRawPoints.append(QPointF(x, iqRawAmp));
+        ++m_iqRawSampleIndex;
+        trimPointBuffer(m_iqRawPoints, 7200);
+        m_lastIqRawUiTick = QDateTime::currentMSecsSinceEpoch();
     }
 
     if (hasIqRef)
@@ -1164,7 +1232,7 @@ void MainWindow::handleTelemetryLine(const QString &line)
         }
         if (m_iqRefDetailLabel != nullptr)
         {
-            m_iqRefDetailLabel->setText(tr("IQR: %1 A").arg(fmt6(iqRefAmp)));
+            m_iqRefDetailLabel->setText(tr("Iq_ref: %1 A").arg(fmt6(iqRefAmp)));
         }
         if (m_iqRefLink != nullptr)
         {
@@ -1186,7 +1254,6 @@ void MainWindow::handleTelemetryLine(const QString &line)
             }
         }
         m_lastIqRefUiTick = QDateTime::currentMSecsSinceEpoch();
-        refreshIqRefChart();
     }
 
     if (hasSpeedMeas || hasSpeedErr)
@@ -1231,6 +1298,11 @@ void MainWindow::handleTelemetryLine(const QString &line)
         {
             m_statusLink->setText(tr("Telemetry OK"));
         }
+    }
+
+    if (hasIq || hasIqRaw || hasIqRef)
+    {
+        refreshIqRefChart();
     }
 }
 
@@ -1519,38 +1591,155 @@ void MainWindow::refreshSpeedMeasChart()
 
 void MainWindow::refreshIqRefChart()
 {
-    if (m_iqRefSeries == nullptr || m_iqRefAxisX == nullptr || m_iqRefAxisY == nullptr)
+    if (m_iqRefSeries == nullptr || m_iqMesSeries == nullptr || m_iqRawSeries == nullptr || m_iqRefAxisX == nullptr || m_iqRefAxisY == nullptr)
     {
         return;
     }
 
-    const qint64 x = m_iqRefSampleIndex;
-    if (m_iqRefPoints.isEmpty() || m_lastTelemetryTick == 0)
+    if ((m_iqRefPoints.isEmpty() && m_iqMesPoints.isEmpty() && m_iqRawPoints.isEmpty()) || m_lastTelemetryTick == 0)
     {
         return;
     }
 
-    const int count = m_iqRefPoints.size();
+    const int refCount = m_iqRefPoints.size();
+    const int mesCount = m_iqMesPoints.size();
+    const int rawCount = m_iqRawPoints.size();
+    const int count = qMax(qMax(refCount, mesCount), rawCount);
     const int startIndex = qBound(0, m_iqRefTimeSlider != nullptr ? m_iqRefTimeSlider->value() : 0, qMax(0, count - 1));
     const int endIndex = qMin(count, startIndex + m_iqRefWindowSize);
     const int size = qMax(0, endIndex - startIndex);
-    m_iqRefSeries->replace(m_iqRefPoints.mid(startIndex, size));
+
+    QVector<QPointF> mesVisible;
+    QVector<QPointF> rawVisible;
+    QVector<QPointF> refVisible;
+    mesVisible.reserve(size);
+    rawVisible.reserve(size);
+    refVisible.reserve(size);
+    for (const QPointF &p : m_iqMesPoints)
+    {
+        if (p.x() >= startIndex && p.x() < endIndex)
+        {
+            mesVisible.append(p);
+        }
+    }
+    for (const QPointF &p : m_iqRawPoints)
+    {
+        if (p.x() >= startIndex && p.x() < endIndex)
+        {
+            rawVisible.append(p);
+        }
+    }
+    for (const QPointF &p : m_iqRefPoints)
+    {
+        if (p.x() >= startIndex && p.x() < endIndex)
+        {
+            refVisible.append(p);
+        }
+    }
+
+    m_iqMesSeries->replace(mesVisible);
+    m_iqRawSeries->replace(rawVisible);
+    m_iqRefSeries->replace(refVisible);
     m_iqRefAxisX->setRange(startIndex, qMax(startIndex + 1, endIndex - 1));
     m_iqRefAxisX->setLabelFormat("%.0f");
     m_iqRefAxisY->setRange(-2.5, 2.5);
     m_iqRefAxisY->setTickCount(11);
     m_iqRefAxisY->setLabelFormat("%.3f");
 
-    if (size > 0 && m_iqRefPeakLabel != nullptr)
+    if (size > 0)
     {
-        double minIqRef = m_iqRefPoints[startIndex].y();
-        double maxIqRef = minIqRef;
-        for (int i = startIndex; i < endIndex; ++i)
+        double minIqMes = 0.0;
+        double maxIqMes = 0.0;
+        bool hasIqMes = false;
+        for (const QPointF &p : mesVisible)
         {
-            minIqRef = qMin(minIqRef, m_iqRefPoints[i].y());
-            maxIqRef = qMax(maxIqRef, m_iqRefPoints[i].y());
+            if (!hasIqMes)
+            {
+                minIqMes = p.y();
+                maxIqMes = p.y();
+                hasIqMes = true;
+            }
+            else
+            {
+                minIqMes = qMin(minIqMes, p.y());
+                maxIqMes = qMax(maxIqMes, p.y());
+            }
         }
-        m_iqRefPeakLabel->setText(tr("IQR: [%1, %2] A").arg(fmt6(minIqRef), fmt6(maxIqRef)));
+
+        double minIqRef = 0.0;
+        double maxIqRef = 0.0;
+        bool hasIqRef = false;
+        for (const QPointF &p : refVisible)
+        {
+            if (!hasIqRef)
+            {
+                minIqRef = p.y();
+                maxIqRef = p.y();
+                hasIqRef = true;
+            }
+            else
+            {
+                minIqRef = qMin(minIqRef, p.y());
+                maxIqRef = qMax(maxIqRef, p.y());
+            }
+        }
+
+        if (m_iqMesPeakLabel != nullptr)
+        {
+            if (hasIqMes)
+            {
+                m_iqMesPeakLabel->setText(tr("Iq_mes: [%1, %2] A").arg(fmt6(minIqMes), fmt6(maxIqMes)));
+            }
+            else
+            {
+                m_iqMesPeakLabel->setText(tr("Iq_mes: [0.000000, 0.000000] A"));
+            }
+        }
+        if (m_iqRawStatus != nullptr)
+        {
+            if (!rawVisible.isEmpty())
+            {
+                m_iqRawStatus->setText(fmt6(m_lastIqRawAmp));
+            }
+            else
+            {
+                m_iqRawStatus->setText(tr("0.000000"));
+            }
+        }
+        if (m_iqRawLink != nullptr)
+        {
+            m_iqRawLink->setText(!rawVisible.isEmpty() ? tr("Telemetry OK") : tr("Waiting telemetry..."));
+        }
+        if (m_iqRefPeakLabel != nullptr)
+        {
+            if (hasIqRef)
+            {
+                m_iqRefPeakLabel->setText(tr("Iq_ref: [%1, %2] A").arg(fmt6(minIqRef), fmt6(maxIqRef)));
+            }
+            else
+            {
+                m_iqRefPeakLabel->setText(tr("Iq_ref: [0.000000, 0.000000] A"));
+            }
+        }
+    }
+    else
+    {
+        if (m_iqMesPeakLabel != nullptr)
+        {
+            m_iqMesPeakLabel->setText(tr("Iq_mes: [0.000000, 0.000000] A"));
+        }
+        if (m_iqRawStatus != nullptr)
+        {
+            m_iqRawStatus->setText(tr("0.000000"));
+        }
+        if (m_iqRawLink != nullptr)
+        {
+            m_iqRawLink->setText(tr("Waiting telemetry..."));
+        }
+        if (m_iqRefPeakLabel != nullptr)
+        {
+            m_iqRefPeakLabel->setText(tr("Iq_ref: [0.000000, 0.000000] A"));
+        }
     }
 }
 
@@ -1616,9 +1805,13 @@ void MainWindow::resetIqRefWindow()
     {
         m_iqRefTimeSlider->setValue(qMax(0, m_iqRefPoints.size() - m_iqRefWindowSize));
     }
+    if (m_iqMesPeakLabel != nullptr)
+    {
+        m_iqMesPeakLabel->setText(tr("Iq_mes: [0.000000, 0.000000] A"));
+    }
     if (m_iqRefPeakLabel != nullptr)
     {
-        m_iqRefPeakLabel->setText(tr("IQR: [0.000000, 0.000000] A"));
+        m_iqRefPeakLabel->setText(tr("Iq_ref: [0.000000, 0.000000] A"));
     }
     refreshIqRefChart();
 }

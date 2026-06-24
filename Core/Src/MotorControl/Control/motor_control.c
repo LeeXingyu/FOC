@@ -52,8 +52,8 @@ void PID_All_Init()
 	//PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.15f);
 	//PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 20.0f);
 	//
-	PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.06f);
-	PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 5.0f);
+	PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.16f);
+	PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 14.22f);
 	PIDREGDQX_CURRENT_setOutputLimitsD(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(fDutyLimit * 0.95f), FIXP30(-fDutyLimit * 0.95f));
 	PIDREGDQX_CURRENT_setOutputLimitsQ(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(fDutyLimit), FIXP30(-fDutyLimit));
 
@@ -63,7 +63,7 @@ void PID_All_Init()
 	PIDREG_SPEED_setOutputLimits(&g_axis.speedCtrl.PIDSpeed, currentLimit_pu, -currentLimit_pu);
 
 	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 3.0f);
-	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 1.5f);
+	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 0.6f);
 }
 
 /**
@@ -112,7 +112,7 @@ void Motor_Control_Init(void)
 	g_axis.speedCtrl.speedRef_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
-	MC_Set_Speed_Ramp(60.0f);
+	MC_Set_Speed_Ramp(20.0f);
 
 	// 初始化状态
 	g_axis.state = AXIS_STATE_IDLE;
@@ -154,16 +154,16 @@ uint16_t FOC_Control(void)
 //	}
 
 	// 速度环输出目标电流
-	static int iSpeedCount = 0;
-	iSpeedCount++;
-	if (iSpeedCount == SPEED_CONTROL_COUNT)
-	{
-		 Speed_Control(&g_axis.speedCtrl, g_axis.enCtrlMode);
-		 g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
-		//g_axis.currCtrl.refIdq.Q = FIXP30(0.2f);   // 你想要的固定力矩电流
-		iSpeedCount = 0;
-	}
-
+	// static int iSpeedCount = 0;
+	// iSpeedCount++;
+	// if (iSpeedCount == SPEED_CONTROL_COUNT)
+	// {
+	// 	 Speed_Control(&g_axis.speedCtrl, g_axis.enCtrlMode);
+	// 	 g_axis.currCtrl.refIdq.Q = g_axis.speedCtrl.iqOut_pu;
+	// 	//g_axis.currCtrl.refIdq.Q = FIXP30(0.08f);   // 你想要的固定力矩电流
+	// 	iSpeedCount = 0;
+	// }
+    g_axis.currCtrl.refIdq.Q = FIXP30(0.06f); 
 	// 电流控制
 	CurrCtrlInput_t currCtrlInput;
 	currCtrlInput.Irst_in_pu.R = g_axis.currCtrl.IrstMeas.R;
@@ -349,7 +349,7 @@ void Open_Loop_Control()
 	FIXP30_CosSinPU(anglePark_pu, &cossinPwm);
 
 	g_axis.currCtrl.refIdq.D = FIXP30(0.0f);
-	g_axis.currCtrl.refIdq.Q = FIXP30(0.05f);
+	g_axis.currCtrl.refIdq.Q = FIXP30(OPEN_LOOP_IQ_REF_A);
 
 	// 反park变换
 	Inv_Park_Duty(g_axis.currCtrl.refIdq, &cossinPwm, &dutyAb);

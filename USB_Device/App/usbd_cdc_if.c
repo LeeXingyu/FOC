@@ -433,6 +433,7 @@ static void CDC_SendTelemetryLine(void)
     char spmr[24];
     char sper[24];
     char id[24];
+    char iqraw[24];
     char iq[24];
     char iqr[24];
     char line[CDC_TX_LINE_MAX];
@@ -448,18 +449,20 @@ static void CDC_SendTelemetryLine(void)
     CDC_AppendFixed6(spmr, sizeof(spmr), s_cdc_telem.latest.speed_meas_rpm);
     CDC_AppendFixed6(sper, sizeof(sper), s_cdc_telem.latest.speed_error_rpm);
     CDC_AppendFixed6(id, sizeof(id), s_cdc_telem.latest.current_d_a);
+    CDC_AppendFixed6(iqraw, sizeof(iqraw), s_cdc_telem.latest.current_q_raw_a);
     CDC_AppendFixed6(iq, sizeof(iq), s_cdc_telem.latest.current_q_a);
     CDC_AppendFixed6(iqr, sizeof(iqr), s_cdc_telem.latest.current_ref_q_a);
 
     (void)snprintf(line,
                    sizeof(line),
-                   "TEL MECH=%s APP=%s SPD=%s SPMR=%s SPER=%s ID=%s IQ=%s IQR=%s AST=%u ERR=%u MODE=%u PST=%u\r\n",
+                   "TEL MECH=%s APP=%s SPD=%s SPMR=%s SPER=%s ID=%s IQRAW=%s IQ=%s IQR=%s AST=%u ERR=%u MODE=%u PST=%u\r\n",
                    mech,
                    app,
                    spd,
                    spmr,
                    sper,
                    id,
+                   iqraw,
                    iq,
                    iqr,
                    s_cdc_telem.latest.axis_state,

@@ -36,6 +36,9 @@ typedef enum
     CAN_FC_RSP_PARAM_RESULT2 = 0x23U,
     CAN_FC_RSP_PARAM_DEBUG1 = 0x24U,
     CAN_FC_RSP_PARAM_DEBUG2 = 0x25U,
+#if APP_USE_CIA402_CAN
+    CAN_FC_CIA402_STATUS    = 0x14U,
+#endif
 #if APP_USE_CAN_FD
     CAN_FC_TELEM_FOC        = 0x30U,
     CAN_FC_TELEM_STATUS     = 0x31U,
@@ -87,6 +90,9 @@ static CAN_Telemetry_Slot_t s_telem_slots[] =
     {CAN_FC_TELEM_STATUS,    CAN_TELEM_PERIOD_STATUS_MS,    0U},
     {CAN_FC_TELEM_TEMP,      CAN_TELEM_PERIOD_VBUS_TEMP_MS, 0U}
 #else
+#if APP_USE_CIA402_CAN
+    {CAN_FC_CIA402_STATUS,   100U,                           0U},
+#endif
     {CAN_FC_TELEM_CUR_REF,   CAN_TELEM_PERIOD_CUR_REF_MS,   0U},
     {CAN_FC_TELEM_CUR_CALC,  CAN_TELEM_PERIOD_CUR_CALC_MS,  0U},
     {CAN_FC_TELEM_SPEED,     CAN_TELEM_PERIOD_SPEED_MS,     0U},
@@ -135,6 +141,11 @@ static void CAN_Telemetry_PackU16(uint8_t *dst, uint16_t value)
 {
     dst[0] = (uint8_t)(value & 0xFFU);
     dst[1] = (uint8_t)((value >> 8) & 0xFFU);
+}
+
+static void CAN_Telemetry_PackS16(uint8_t *dst, int16_t value)
+{
+    CAN_Telemetry_PackU16(dst, (uint16_t)value);
 }
 
 static void CAN_Telemetry_PackFloat(uint8_t *dst, float value)
@@ -382,6 +393,21 @@ static bool CAN_Telemetry_BuildPeriodicFrame(CanTelemetryFuncCode_t funcCode,
 
     switch (funcCode)
     {
+#if APP_USE_CIA402_CAN
+        case CAN_FC_CIA402_STATUS:
+        {
+            int16_t speedRpm = (int16_t)(FIXP30_toF(g_axis.speedCtrl.speedMeas_pu) * FREQUENCY_SCALE * 60.0f / (float)MC_Get_Pole_Pairs());
+            int16_t iqmA = (int16_t)(FIXP30_toF(g_axis.currCtrl.refIdq.Q) * CURRENT_SCALE * 1000.0f);
+            uint16_t statusword = MC_Get_Cia402_Statusword();
+            CAN_Telemetry_PackU16(&frame[0], statusword);
+            CAN_Telemetry_PackS16(&frame[2], speedRpm);
+            CAN_Telemetry_PackS16(&frame[4], iqmA);
+            frame[6] = (uint8_t)g_axis.enCtrlMode;
+            frame[7] = (uint8_t)g_axis.state;
+            *lenOut = 8U;
+            return true;
+        }
+#endif
 #if APP_USE_CAN_FD
         case CAN_FC_TELEM_FOC:
             CAN_Telemetry_PackFloat(&frame[0], FIXP30_toF(g_axis.currCtrl.refIdq.D) * CURRENT_SCALE);

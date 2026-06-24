@@ -25,6 +25,7 @@ typedef struct
     float speed_meas_pu;
     float speed_error_pu;
     float current_d_a;
+    float current_q_raw_a;
     float current_q_a;
     float current_ref_q_a;
 } CDC_DebugTelemetry_t;

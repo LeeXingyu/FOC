@@ -3,6 +3,7 @@
 #include "mc_interface.h"
 #include "mc_tasks.h"
 #include "param_identify.h"
+#include "motor_parameters.h"
 
 #include <math.h>
 
@@ -31,6 +32,11 @@ typedef enum
     CAN_FC_FLASH_CLEAR      = 0x0DU,
     CAN_FC_GET_ID           = 0x0EU,
     CAN_FC_SET_ID           = 0x0FU,
+    CAN_FC_CIA402_CONTROLWORD = 0x10U,
+    CAN_FC_CIA402_MODE        = 0x11U,
+    CAN_FC_CIA402_TARGET_SP   = 0x12U,
+    CAN_FC_CIA402_TARGET_TQ   = 0x13U,
+    CAN_FC_CIA402_STATUS      = 0x14U,
     CAN_FC_RSP_CMD_STATUS   = 0x20U,
     CAN_FC_RSP_PARAM_STATE  = 0x21U,
     CAN_FC_RSP_PARAM_RESULT1 = 0x22U,
@@ -206,6 +212,24 @@ static float Can_ReadFloatLE(const uint8_t *data)
     u.b[2] = data[2];
     u.b[3] = data[3];
     return u.f;
+}
+
+static int32_t Can_ReadS32LE(const uint8_t *data)
+{
+    return (int32_t)(((uint32_t)data[0]) |
+                     ((uint32_t)data[1] << 8) |
+                     ((uint32_t)data[2] << 16) |
+                     ((uint32_t)data[3] << 24));
+}
+
+static uint16_t Can_ReadU16LE(const uint8_t *data)
+{
+    return (uint16_t)(((uint16_t)data[0]) | ((uint16_t)data[1] << 8));
+}
+
+static int16_t Can_ReadS16LE(const uint8_t *data)
+{
+    return (int16_t)Can_ReadU16LE(data);
 }
 
 static void Can_SendCmdStatus(uint16_t cmdSid, CanCmdStatus_t status, uint8_t extra, uint8_t nodeId)
@@ -452,6 +476,84 @@ static CanCmdStatus_t Can_SetNodeId(const uint8_t *data, uint8_t len, uint8_t *e
     return CAN_CMD_STATUS_OK;
 }
 
+static CanCmdStatus_t Can_Cia402Controlword(const uint8_t *data, uint8_t len, uint8_t *extra)
+{
+    uint16_t controlword;
+    (void)extra;
+
+    if (len != 2U)
+    {
+        return CAN_CMD_STATUS_BAD_LEN;
+    }
+
+    controlword = Can_ReadU16LE(data);
+    return (MC_Apply_Cia402_Controlword(controlword) == MC_SUCCESS) ? CAN_CMD_STATUS_OK : CAN_CMD_STATUS_BAD_STATE;
+}
+
+static CanCmdStatus_t Can_Cia402Mode(const uint8_t *data, uint8_t len, uint8_t *extra)
+{
+    int8_t mode;
+    (void)extra;
+
+    if (len != 1U)
+    {
+        return CAN_CMD_STATUS_BAD_LEN;
+    }
+
+    mode = (int8_t)data[0];
+    switch (mode)
+    {
+        case CIA402_MODE_PROFILE_POSITION:
+        case CIA402_MODE_CYCLIC_SYNC_POSITION:
+            MC_Set_Control_Mode(CTRL_MODE_POSITION);
+            break;
+
+        case CIA402_MODE_PROFILE_VELOCITY:
+        case CIA402_MODE_CYCLIC_SYNC_VELOCITY:
+            MC_Set_Control_Mode(CTRL_MODE_SPEED);
+            break;
+
+        case CIA402_MODE_PROFILE_TORQUE:
+        case CIA402_MODE_CYCLIC_SYNC_TORQUE:
+            MC_Set_Control_Mode(CTRL_MODE_TORQUE);
+            break;
+
+        default:
+            return CAN_CMD_STATUS_BAD_ARG;
+    }
+
+    return CAN_CMD_STATUS_OK;
+}
+
+static CanCmdStatus_t Can_Cia402TargetSpeed(const uint8_t *data, uint8_t len, uint8_t *extra)
+{
+    int32_t targetRpm;
+    (void)extra;
+
+    if (len != 4U)
+    {
+        return CAN_CMD_STATUS_BAD_LEN;
+    }
+
+    targetRpm = Can_ReadS32LE(data);
+    MC_Set_Speed_Reference((float)targetRpm);
+    return CAN_CMD_STATUS_OK;
+}
+
+static CanCmdStatus_t Can_Cia402TargetTorque(const uint8_t *data, uint8_t len, uint8_t *extra)
+{
+    int16_t targetIq_mA;
+    (void)extra;
+
+    if (len != 2U)
+    {
+        return CAN_CMD_STATUS_BAD_LEN;
+    }
+
+    targetIq_mA = Can_ReadS16LE(data);
+    return (MC_Set_Torque_Reference((float)targetIq_mA / 1000.0f) == MC_SUCCESS) ? CAN_CMD_STATUS_OK : CAN_CMD_STATUS_BAD_ARG;
+}
+
 static const CanCmdTable_t s_can_cmd_table[] =
 {
     {CAN_FC_STOP_MOTOR, 0U, Can_StopMotor},
@@ -468,7 +570,13 @@ static const CanCmdTable_t s_can_cmd_table[] =
     {CAN_FC_FLASH_READ_PARAM, 0U, Can_FlashReadParam},
     {CAN_FC_FLASH_CLEAR, 0U, Can_FlashClear},
     {CAN_FC_GET_ID, 0U, Can_GetNodeId},
-    {CAN_FC_SET_ID, 1U, Can_SetNodeId}
+    {CAN_FC_SET_ID, 1U, Can_SetNodeId},
+#if APP_USE_CIA402_CAN
+    {CAN_FC_CIA402_CONTROLWORD, 2U, Can_Cia402Controlword},
+    {CAN_FC_CIA402_MODE, 1U, Can_Cia402Mode},
+    {CAN_FC_CIA402_TARGET_SP, 4U, Can_Cia402TargetSpeed},
+    {CAN_FC_CIA402_TARGET_TQ, 2U, Can_Cia402TargetTorque}
+#endif
 };
 
 static CanCmdStatus_t Can_DispatchBySid(uint16_t sid, const uint8_t *data, uint8_t len, uint8_t *extraOut)

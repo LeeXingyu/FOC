@@ -153,6 +153,7 @@ void Tem_Task(void *argument)
     telem.speed_error_rpm = (telem.speed_error_pu * FREQUENCY_SCALE * 60.0f) / (float)MC_Get_Pole_Pairs();
     telem.speed_rpm = telem.speed_meas_rpm;
     telem.current_d_a = FIXP30_toF(g_axis.currCtrl.calcIdq.D) * CURRENT_SCALE;
+    telem.current_q_raw_a = MotorControl_GetIqRawDisplayA();
     telem.current_q_a = MotorControl_GetIqFilteredDisplayA();
     telem.current_ref_q_a = FIXP30_toF(g_axis.currCtrl.refIdq.Q) * CURRENT_SCALE;
     CDC_Debug_SetTelemetry(&telem);

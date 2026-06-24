@@ -14,11 +14,28 @@
 
 #define TF_REGULATION_RATE                  (uint32_t)((uint32_t)(PWM_FREQUENCY) / (REGULATION_EXECUTION_RATE))
 #define BOARD_MAX_MODULATION                (float_t)((100 * 1.15f) / 100.0f)
-#define SPEED_CONTROL_RATE                  500
 #define SPEED_MEASUREMENT_RATE_HZ           1000.0f
-#define SPEED_MEAS_WINDOW_SAMPLES           2U
 #define SPEED_CONTROL_COUNT                 32
+#define SPEED_CONTROL_RATE                  (uint32_t)((uint32_t)(TF_REGULATION_RATE) / (SPEED_CONTROL_COUNT))
+#define SPEED_MEAS_WINDOW_SAMPLES           2U
 #define POSITION_CONTROL_COUNT              16
+
+/*
+ * CiA 402 compatibility layer over the existing custom CAN transport.
+ * Keep enabled by default so the new object mapping can coexist with
+ * the legacy command set.
+ */
+#ifndef APP_USE_CIA402_CAN
+#define APP_USE_CIA402_CAN                  0U
+#endif
+
+#define CIA402_MODE_NONE                    0
+#define CIA402_MODE_PROFILE_POSITION        1
+#define CIA402_MODE_PROFILE_VELOCITY        3
+#define CIA402_MODE_PROFILE_TORQUE          4
+#define CIA402_MODE_CYCLIC_SYNC_POSITION    8
+#define CIA402_MODE_CYCLIC_SYNC_VELOCITY    9
+#define CIA402_MODE_CYCLIC_SYNC_TORQUE      10
 
 /*
  * Speed measurement mode:
@@ -46,7 +63,7 @@
  * Added to speed-loop Iq output with direction sign following speed command.
  */
 #ifndef SPEED_TORQUE_COMP_ENABLE
-#define SPEED_TORQUE_COMP_ENABLE            1U
+#define SPEED_TORQUE_COMP_ENABLE            0U
 #endif
 /*
  * Human-friendly tuning units:
@@ -78,5 +95,8 @@
 #define PWM_PERIOD_CYCLES                   10624
 
 #define PID_MAX_CURRENT                     1.5f
+
+/* Open-loop startup torque current reference in ampere. */
+#define OPEN_LOOP_IQ_REF_A                  0.05f
 
 #endif /* INC_MOTORCONTROL_CORE_MOTOR_PARAMETERS_H_ */

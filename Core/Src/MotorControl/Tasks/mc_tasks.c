@@ -195,6 +195,7 @@ void Offset_Calib_Handle()
 		g_axis.pPWMCHandle->uCalibCount = 0;
 		g_axis.pPWMCHandle->fCalibRsum = 0.0f;
 		g_axis.pPWMCHandle->fCalibSsum = 0.0f;
+		g_axis.pPWMCHandle->fCalibTsum = 0.0f;
 	}
 	else
 	{
@@ -203,14 +204,17 @@ void Offset_Calib_Handle()
 		g_axis.pPWMCHandle->uCalibCount++;
 		g_axis.pPWMCHandle->fCalibRsum += FIXP30_toF(g_axis.currCtrl.IrstMeas.R) * CURRENT_SCALE;
 		g_axis.pPWMCHandle->fCalibSsum += FIXP30_toF(g_axis.currCtrl.IrstMeas.S) * CURRENT_SCALE;
+		g_axis.pPWMCHandle->fCalibTsum += FIXP30_toF(g_axis.currCtrl.IrstMeas.T) * CURRENT_SCALE;
 
 		if (g_axis.pPWMCHandle->uCalibCount >= CURR_CALIB_COUNT)
 		{
 			float fOffsetIr = g_axis.pPWMCHandle->fCalibRsum / (float)g_axis.pPWMCHandle->uCalibCount;
 			float fOffsetIs = g_axis.pPWMCHandle->fCalibSsum / (float)g_axis.pPWMCHandle->uCalibCount;
+			float fOffsetIt = g_axis.pPWMCHandle->fCalibTsum / (float)g_axis.pPWMCHandle->uCalibCount;
 
 			g_axis.pPWMCHandle->offsetIr = FIXP30(fOffsetIr / CURRENT_SCALE);
 			g_axis.pPWMCHandle->offsetIs = FIXP30(fOffsetIs / CURRENT_SCALE);
+			g_axis.pPWMCHandle->offsetIt = FIXP30(fOffsetIt / CURRENT_SCALE);
 
 			g_axis.state = AXIS_STATE_ENCODER_CALIB;
 			g_axis.pPWMCHandle->bIsMeasuringOffset = false;

@@ -334,11 +334,7 @@ void Curr_Offset_Handle(PWMC_Handle_t * pHandle, Currents_Irst_t *pIrstMeas)
 	{
 		pIrstMeas->R = pIrstMeas->R - pHandle->offsetIr;
 		pIrstMeas->S = pIrstMeas->S - pHandle->offsetIs;
-		pIrstMeas->T = -(pIrstMeas->S + pIrstMeas->R);
-		fixp30_t r = pIrstMeas->R;
-		fixp30_t s = pIrstMeas->S;
-		pIrstMeas->R = s;
-		pIrstMeas->S = r;
+		pIrstMeas->T = pIrstMeas->T - pHandle->offsetIt;
 	}
 }
 

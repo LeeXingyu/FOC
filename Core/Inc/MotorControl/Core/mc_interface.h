@@ -70,6 +70,28 @@ void MC_Set_Speed_Ki(float fKi);
   */
 void MC_Set_Speed_Reference(float fRefSpeed);
 
+/**
+  * @brief  设置转矩/Iq参考值
+  * @param  fIqA 目标Iq，单位 A
+  */
+MC_RetStatus_t MC_Set_Torque_Reference(float fIqA);
+
+/**
+  * @brief  CiA 402 controlword 入口
+  * @param  controlword 0x6040
+  */
+MC_RetStatus_t MC_Apply_Cia402_Controlword(uint16_t controlword);
+
+/**
+  * @brief  CiA 402 fault reset
+  */
+MC_RetStatus_t MC_Fault_Reset(void);
+
+/**
+  * @brief  CiA 402 statusword
+  */
+uint16_t MC_Get_Cia402_Statusword(void);
+
 uint8_t MC_Get_Pole_Pairs(void);
 MC_RetStatus_t MC_Set_Pole_Pairs(uint8_t polePairs);
 

@@ -10,6 +10,7 @@
 #include "motor_parameters.h"
 #include "MotorControl/Fbdk/speed_pos_fbdk.h"
 #include "Utils/Pid/pidreg_speed.h"
+#include <math.h>
 
 static uint8_t MC_PolePairsOrDefault(void)
 {
@@ -122,6 +123,100 @@ void MC_Set_Speed_Reference(float fRefSpeed)
 {
 	float fFreqHz = (fRefSpeed * (float)MC_PolePairsOrDefault()) / 60.0f;
 	g_axis.speedCtrl.speedRef_pu = FIXP30( fFreqHz / FREQUENCY_SCALE);
+}
+
+MC_RetStatus_t MC_Set_Torque_Reference(float fIqA)
+{
+	if (!isfinite(fIqA))
+	{
+		return MC_FAILED;
+	}
+
+	g_axis.currCtrl.refIdq.Q = FIXP30(fIqA / CURRENT_SCALE);
+	return MC_SUCCESS;
+}
+
+MC_RetStatus_t MC_Apply_Cia402_Controlword(uint16_t controlword)
+{
+	/*
+	 * Minimal CiA 402 behavior:
+	 * - bit0/1/2/3: enable sequence
+	 * - bit7: fault reset
+	 * We only map the sequence to existing start/stop logic.
+	 */
+	if ((controlword & (1U << 7)) != 0U)
+	{
+		return MC_Fault_Reset();
+	}
+
+	if ((controlword & 0x000F) == 0x000F)
+	{
+		return MC_Start_Motor();
+	}
+
+	if ((controlword & 0x0006) == 0x0000)
+	{
+		return MC_Stop_Motor();
+	}
+
+	return MC_SUCCESS;
+}
+
+MC_RetStatus_t MC_Fault_Reset(void)
+{
+	if (g_axis.state == AXIS_STATE_FAULT_NOW)
+	{
+		g_axis.state = AXIS_STATE_FAULT_OVER;
+	}
+
+	if (g_axis.state == AXIS_STATE_FAULT_OVER)
+	{
+		g_axis.error = AXIS_ERROR_NONE;
+		MC_Stop_Motor();
+		g_axis.state = AXIS_STATE_IDLE;
+		return MC_SUCCESS;
+	}
+
+	return MC_FAILED;
+}
+
+uint16_t MC_Get_Cia402_Statusword(void)
+{
+	uint16_t sw = 0U;
+
+	switch (g_axis.state)
+	{
+		case AXIS_STATE_IDLE:
+			sw |= (1U << 0);
+			break;
+		case AXIS_STATE_RUN:
+			sw |= (1U << 0);
+			sw |= (1U << 1);
+			sw |= (1U << 2);
+			sw |= (1U << 4);
+			break;
+		case AXIS_STATE_FAULT_NOW:
+		case AXIS_STATE_FAULT_OVER:
+			sw |= (1U << 3);
+			break;
+		default:
+			break;
+	}
+
+	if (g_axis.enCtrlMode == CTRL_MODE_SPEED)
+	{
+		sw |= (1U << 10);
+	}
+	else if (g_axis.enCtrlMode == CTRL_MODE_POSITION)
+	{
+		sw |= (1U << 11);
+	}
+	else if (g_axis.enCtrlMode == CTRL_MODE_TORQUE)
+	{
+		sw |= (1U << 8);
+	}
+
+	return sw;
 }
 
 uint8_t MC_Get_Pole_Pairs(void)
