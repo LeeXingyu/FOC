@@ -40,8 +40,9 @@ void Inv_Park_Duty( Duty_Ddq_t Ddq, FIXP_CosSin_t* cosSin, Duty_Dab_t * pDab)
  * */
 void Clarke_Current( const Currents_Irst_t Irst, Currents_Iab_t *pIab)
 {
-	pIab->A = FIXP30_mpy(Irst.R, FIXP30(2.0f / 3.0f)) - FIXP30_mpy(Irst.S + Irst.T, FIXP30(1.0f / 3.0f));
-	pIab->B = FIXP30_mpy((Irst.S - Irst.T), FIXP30(0.577350269));
+	/* Test: invert measured current vector polarity to check dq sign consistency. */
+	pIab->A = -(FIXP30_mpy(Irst.R, FIXP30(2.0f / 3.0f)) - FIXP30_mpy(Irst.S + Irst.T, FIXP30(1.0f / 3.0f)));
+	pIab->B = -FIXP30_mpy((Irst.S - Irst.T), FIXP30(0.577350269));
 
 	return;
 }
