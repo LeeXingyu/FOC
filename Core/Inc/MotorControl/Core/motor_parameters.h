@@ -21,6 +21,26 @@
 #define POSITION_CONTROL_COUNT              16
 
 /*
+ * Speed-loop segmented PI.
+ * 1: enable low-speed/high-speed gain switching
+ * 0: use the default gains everywhere
+ */
+#ifndef SPEED_PI_SEGMENTED_ENABLE
+#define SPEED_PI_SEGMENTED_ENABLE           1U
+#endif
+
+/* Low-speed PI band: use stronger gains below this mechanical speed. */
+#define SPEED_PI_LOW_BAND_RPM               40.0f
+
+/* Default gains for 40~100 rpm and above. */
+#define SPEED_PI_DEFAULT_KP                 2.62f
+#define SPEED_PI_DEFAULT_KI                 1.30f
+
+/* Low-speed gains below 40 rpm. */
+#define SPEED_PI_LOW_KP                     7.40f
+#define SPEED_PI_LOW_KI                     9.00f
+
+/*
  * CiA 402 compatibility layer over the existing custom CAN transport.
  * Keep enabled by default so the new object mapping can coexist with
  * the legacy command set.

@@ -52,7 +52,7 @@ void PID_All_Init()
 	//PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.15f);
 	//PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 20.0f);
 	//
-	PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.5f);
+	PIDREGDQX_CURRENT_setKp_si(&g_axis.currCtrl.pid_IdIqX_obj, 0.2f);
 	PIDREGDQX_CURRENT_setWi_si(&g_axis.currCtrl.pid_IdIqX_obj, 15.0f);
 	PIDREGDQX_CURRENT_setOutputLimitsD(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(fDutyLimit * 0.95f), FIXP30(-fDutyLimit * 0.95f));
 	PIDREGDQX_CURRENT_setOutputLimitsQ(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(fDutyLimit), FIXP30(-fDutyLimit));
@@ -62,9 +62,10 @@ void PID_All_Init()
 	PIDREG_SPEED_init(&g_axis.speedCtrl.PIDSpeed, CURRENT_SCALE, FREQUENCY_SCALE, SPEED_CONTROL_RATE);
 	PIDREG_SPEED_setOutputLimits(&g_axis.speedCtrl.PIDSpeed, currentLimit_pu, -currentLimit_pu);
 
-	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, 0.5f);
-	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, 2.3f);
+	PIDREG_SPEED_setKp_si(&g_axis.speedCtrl.PIDSpeed, SPEED_PI_DEFAULT_KP);
+	PIDREG_SPEED_setKi_si(&g_axis.speedCtrl.PIDSpeed, SPEED_PI_DEFAULT_KI);
 }
+
 
 /**
   * @brief  电机控制初始化
@@ -112,7 +113,7 @@ void Motor_Control_Init(void)
 	g_axis.speedCtrl.speedRef_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
-	MC_Set_Speed_Ramp(20.0f);
+	MC_Set_Speed_Ramp(8.0f);
 
 	// 初始化状态
 	g_axis.state = AXIS_STATE_IDLE;
@@ -129,8 +130,7 @@ void Motor_Control_Init(void)
   */
 // 速度环输出目标电流
 static int iSpeedCount = 0;
-static int iqref_count = 0;
-float iqref = 0.00f;
+
 uint16_t FOC_Control(void)
 {
 
@@ -166,21 +166,7 @@ uint16_t FOC_Control(void)
 		iSpeedCount = 0;
 	}
 	    
-		// if(iqref_count < (16000*2))
-		// {
-			//g_axis.currCtrl.refIdq.Q = FIXP30(iqref); 
-		//	iqref_count++;	
-		// }
-		// else
-		// {
-		// 	g_axis.currCtrl.refIdq.Q = FIXP30(-iqref); 
-		// 	iqref_count++;	
-		// 	if(iqref_count >= (16000*4))
-		// 	{
-		// 		iqref_count = 0;
-		// 	}
-		// }
-    //g_axis.currCtrl.refIdq.Q = FIXP30(0.04f); 
+   // g_axis.currCtrl.refIdq.Q = FIXP30(0.01f); 
 	// 电流控制
 	CurrCtrlInput_t currCtrlInput;
 	currCtrlInput.Irst_in_pu.R = g_axis.currCtrl.IrstMeas.R;
@@ -264,6 +250,21 @@ void Curr_Control(CurrCtrl_t *pCurrCtrl, CurrCtrlInput_t* pCurrCtrlInput)
 void Speed_Control(SpeedCtrl_t *pSpeedCtrl, ControlMode_En enControlMode)
 {
 	// 速度参考斜坡
+#if SPEED_PI_SEGMENTED_ENABLE
+	{
+		const float speedRefRpm = fabsf(FIXP30_toF(pSpeedCtrl->speedRefRamp_pu) * FREQUENCY_SCALE * 60.0f / (float)POLE_PAIR_NUM);
+		if (speedRefRpm < SPEED_PI_LOW_BAND_RPM)
+		{
+			PIDREG_SPEED_setKp_si(&pSpeedCtrl->PIDSpeed, SPEED_PI_LOW_KP);
+			PIDREG_SPEED_setKi_si(&pSpeedCtrl->PIDSpeed, SPEED_PI_LOW_KI);
+		}
+		else
+		{
+			PIDREG_SPEED_setKp_si(&pSpeedCtrl->PIDSpeed, SPEED_PI_DEFAULT_KP);
+			PIDREG_SPEED_setKi_si(&pSpeedCtrl->PIDSpeed, SPEED_PI_DEFAULT_KI);
+		}
+	}
+#endif
 	fixp30_t speedRamp = pSpeedCtrl->speedRamp_pu;
 	fixp30_t speedDelta_pu = pSpeedCtrl->speedRef_pu - pSpeedCtrl->speedRefRamp_pu;
 	pSpeedCtrl->speedRefRamp_pu += FIXP_sat(speedDelta_pu, speedRamp, -speedRamp);

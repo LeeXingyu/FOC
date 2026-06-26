@@ -62,11 +62,12 @@ private:
     void setupDebugPage(QWidget *page);
     void appendLog(const QString &text);
     void appendDebug(const QString &text);
+    static void setLabelTextIfChanged(QLabel *label, const QString &text);
     void setConnectedUi(bool connected);
     void processLine(const QString &line);
     void handleTelemetryLine(const QString &line);
     void updateAngle(double mechDeg, double appDeg);
-    void updateSpeed(double speedRpm, double iqAmp, double idAmp);
+    void updateSpeed(double speedRpm);
     void refreshAngleChart();
     void refreshSpeedChart();
     void refreshIqRefChart();
@@ -127,6 +128,8 @@ private:
     QTextEdit *m_logEdit = nullptr;
     QPlainTextEdit *m_debugEdit = nullptr;
     QPushButton *m_debugClearButton = nullptr;
+    QString m_lastLogText;
+    QString m_lastDebugText;
 
     QChartView *m_angleChartView = nullptr;
     QLineSeries *m_angleMechSeries = nullptr;
@@ -144,15 +147,10 @@ private:
 
     QChartView *m_speedChartView = nullptr;
     QLineSeries *m_speedSeries = nullptr;
-    QLineSeries *m_speedIqSeries = nullptr;
-    QLineSeries *m_speedIdSeries = nullptr;
     QValueAxis *m_speedAxisX = nullptr;
     QValueAxis *m_speedAxisY = nullptr;
-    QValueAxis *m_speedAxisIq = nullptr;
     QLabel *m_statusSpeed = nullptr;
     QLabel *m_speedLink = nullptr;
-    QLabel *m_speedDetailLabel = nullptr;
-    QLabel *m_speedPeakLabel = nullptr;
     QSlider *m_speedTimeSlider = nullptr;
     QToolButton *m_speedZoomInButton = nullptr;
     QToolButton *m_speedZoomOutButton = nullptr;
@@ -160,38 +158,36 @@ private:
     bool m_speedSliderDragging = false;
 
     QChartView *m_iqRefChartView = nullptr;
-    QLineSeries *m_iqMesSeries = nullptr;
     QLineSeries *m_iqRawSeries = nullptr;
     QLineSeries *m_iqRefSeries = nullptr;
+    QLineSeries *m_iqIdSeries = nullptr;
     QValueAxis *m_iqRefAxisX = nullptr;
     QValueAxis *m_iqRefAxisY = nullptr;
     QLabel *m_iqRefStatus = nullptr;
-    QLabel *m_iqMesStatus = nullptr;
     QLabel *m_iqRefLink = nullptr;
-    QLabel *m_iqMesLink = nullptr;
     QLabel *m_iqRefDetailLabel = nullptr;
-    QLabel *m_iqMesDetailLabel = nullptr;
     QLabel *m_iqRefPeakLabel = nullptr;
-    QLabel *m_iqMesPeakLabel = nullptr;
     QLabel *m_iqRawStatus = nullptr;
     QLabel *m_iqRawLink = nullptr;
+    QLabel *m_iqIdStatus = nullptr;
+    QLabel *m_iqIdLink = nullptr;
+    QLabel *m_iqIdDetailLabel = nullptr;
+    QLabel *m_iqIdPeakLabel = nullptr;
     QSlider *m_iqRefTimeSlider = nullptr;
     QToolButton *m_iqRefZoomInButton = nullptr;
     QToolButton *m_iqRefZoomOutButton = nullptr;
     QToolButton *m_iqRefZoomResetButton = nullptr;
     bool m_iqRefSliderDragging = false;
-    QVector<QPointF> m_iqMesPoints;
     QVector<QPointF> m_iqRawPoints;
     QVector<QPointF> m_iqRefPoints;
-    qint64 m_iqMesSampleIndex = 0;
+    QVector<QPointF> m_iqIdPoints;
     qint64 m_iqRawSampleIndex = 0;
     qint64 m_iqRefSampleIndex = 0;
+    qint64 m_iqIdSampleIndex = 0;
     int m_iqRefWindowSize = 1800;
     bool m_iqRefAutoFollow = true;
-    double m_lastIqMesAmp = 0.0;
     double m_lastIqRawAmp = 0.0;
     double m_lastIqRefAmp = 0.0;
-    qint64 m_lastIqMesUiTick = 0;
     qint64 m_lastIqRawUiTick = 0;
     qint64 m_lastIqRefUiTick = 0;
 
