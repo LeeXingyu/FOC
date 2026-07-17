@@ -104,7 +104,7 @@
 #define VOLTAGE_SCALE                       (float_t)(264)
 #define FREQUENCY_SCALE                     (float_t)(1000.0f)
 
-#define MOTOR_ENCODER_REVERSE               1
+#define MOTOR_ENCODER_REVERSE               0
 #define SPEED_MEAS_INVERT                   0
 #define TIM_CLOCK_HZ                        170000000U
 #define PWM_FREQ_HZ                         16000U
@@ -117,6 +117,6 @@
 #define PID_MAX_CURRENT                     1.5f
 
 /* Open-loop startup torque current reference in ampere. */
-#define OPEN_LOOP_IQ_REF_A                  0.05f
+#define OPEN_LOOP_IQ_REF_A                  0.10f
 
 #endif /* INC_MOTORCONTROL_CORE_MOTOR_PARAMETERS_H_ */
