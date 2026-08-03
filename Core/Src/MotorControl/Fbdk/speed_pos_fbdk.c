@@ -13,6 +13,7 @@
 static uint32_t s_prevCircleRawNative = 0U;
 static uint32_t s_prevSpeedRawNative = 0U;
 static int64_t s_absEncoderNative = 0;
+float s_prevEncoderRaw = 0.0f;
 static bool s_circleHistoryValid = false;
 static bool s_speedHistoryValid = false;
 static float s_speedObserverRpm = 0.0f;

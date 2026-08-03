@@ -67,6 +67,8 @@ volatile uint8_t g_adc2_rule_dma_done = 0U;
 uint16_t g_adc2_rule_dma_buf[4] = {0U};
 volatile uint8_t g_mc_calib_go_run_after_finish = 0U;
 volatile uint8_t g_mc_calib_done_once = 0U;
+bool g_bStartCurrentAutoTune = false;
+bool g_bStartSpeedAutoTune = false;
 //extern char g_uartRxBuffer[UART3_DMA_BUF_SIZE];
 /* USER CODE END PV */
 

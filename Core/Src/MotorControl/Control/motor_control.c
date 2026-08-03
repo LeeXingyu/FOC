@@ -9,12 +9,16 @@
 #include "main.h"
 #include "mc_math.h"
 #include "curr_fbdk.h"
+#include "foc.h"
 #include "motor_parameters.h"
 #include "fixpmath.h"
 #include "mc_interface.h"
 #include "mc_tasks.h"
 #include "param_identify.h"
 #include "encoder.h"
+#include "speed_pos_fbdk.h"
+
+static void Update_Open_Loop_Angle(PosCtrl_t *pHandle, fixp30_t speedRef);
 CurrentFilter_t iqFilter;
 static float s_iqRawDisplayA = 0.0f;
 static float s_iqFilteredDisplayA = 0.0f;
@@ -135,7 +139,7 @@ uint16_t FOC_Control(void)
 {
 
 	// 获取三相电流
-	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
+	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas, NULL);
 
 	// 获取母线电压
 	//Get_Vbus_Measurements(g_axis.pPWMCHandle, &g_axis.busVoltage);
@@ -341,7 +345,7 @@ void Open_Loop_Control()
 	fixp30_t anglePark_pu = FIXP30(0.0F);
 
 	// 获取三相电流
-	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
+	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas, NULL);
 
 	FIXP_CosSin_t cossinPark;
 	FIXP30_CosSinPU(anglePark_pu, &cossinPark);

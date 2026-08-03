@@ -73,6 +73,8 @@ extern volatile uint8_t g_comm_int_irq_pending;
 extern volatile uint32_t g_rtos_task_create_fail_mask;
 extern volatile uint8_t g_mc_calib_go_run_after_finish;
 extern volatile uint8_t g_mc_calib_done_once;
+extern bool g_bStartCurrentAutoTune;
+extern bool g_bStartSpeedAutoTune;
 
 #define COMM_TASK_RX_FLAG  (1UL << 0)
 

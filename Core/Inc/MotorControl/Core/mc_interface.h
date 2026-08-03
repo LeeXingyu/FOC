@@ -45,6 +45,7 @@ void MC_Zero_Calibration();
   * @param  dutyCycle 归一化幅值
   */
 void MC_Set_Duty_Cycle(Duty_Ddq_t dutyCycle);
+void MC_Reset_Control_State(void);
 
 /**
   * @brief  设置电气频率得变化率

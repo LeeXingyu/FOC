@@ -336,7 +336,7 @@ void MainWindow::setupControlPage(QWidget *page)
 
     m_calibModeSpin = new QSpinBox(presetGroup);
     m_calibModeSpin->setRange(0, 255);
-    m_calibModeSpin->setValue(0);
+    m_calibModeSpin->setValue(5);
 
     m_startButton = new QPushButton(tr("Start"), presetGroup);
     m_stopButton = new QPushButton(tr("Stop"), presetGroup);

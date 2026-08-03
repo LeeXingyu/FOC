@@ -1,12 +1,27 @@
 #ifndef INC_MOTORCONTROL_FBDK_ENCODER_H_
 #define INC_MOTORCONTROL_FBDK_ENCODER_H_
 
+#include "stm32g4xx_hal.h"
 #include <stdint.h>
-#include "main.h"
-#include "spi.h"
-#include "as5047p.h"
-#include "kth7824.h"
-#include "mt6835.h"
+
+typedef struct __SPI_HandleTypeDef SPI_HandleTypeDef;
+
+/* Keep this header independent from main.h to avoid circular includes through mc_type.h. */
+#ifndef BOARD_ENCODER_TYPE_KTH7824
+#define BOARD_ENCODER_TYPE_KTH7824   0U
+#endif
+#ifndef BOARD_ENCODER_TYPE_AS5047P
+#define BOARD_ENCODER_TYPE_AS5047P   1U
+#endif
+#ifndef BOARD_ENCODER_TYPE_MT6835
+#define BOARD_ENCODER_TYPE_MT6835    2U
+#endif
+#ifndef MOTOR_ENCODER_TYPE
+#define MOTOR_ENCODER_TYPE           BOARD_ENCODER_TYPE_MT6835
+#endif
+#ifndef LOAD_ENCODER_TYPE
+#define LOAD_ENCODER_TYPE            MOTOR_ENCODER_TYPE
+#endif
 
 /* FOC control uses a unified 16-bit electrical angle domain for all encoder types. */
 #define ENCODER_FOC_COMPAT_COUNT  65536UL
@@ -18,14 +33,6 @@ typedef enum
     ENC_TYPE_AS5047P = BOARD_ENCODER_TYPE_AS5047P,
     ENC_TYPE_MT6835 = BOARD_ENCODER_TYPE_MT6835
 } EncoderType_t;
-
-#ifndef MOTOR_ENCODER_TYPE
-#define MOTOR_ENCODER_TYPE        BOARD_ENCODER_TYPE_MT6835
-#endif
-
-#ifndef LOAD_ENCODER_TYPE
-#define LOAD_ENCODER_TYPE         MOTOR_ENCODER_TYPE
-#endif
 
 typedef enum
 {

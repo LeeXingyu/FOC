@@ -6,19 +6,24 @@
  */
 
 #include "mc_tasks.h"
+#include <math.h>
 #include "fixpmath.h"
 #include "main.h"
 #include "curr_fbdk.h"
 #include "speed_pos_fbdk.h"
 #include "foc.h"
 #include "motor_parameters.h"
+#include "motor_control.h"
 #include "encoder.h"
 #include "param_identify.h"
+#include "curr_autotune.h"
+#include "speed_autotune.h"
 
 static uint16_t FOC_Controller(void);
 static void Param_Calib_Handle(void);
 static void Param_Calib_SampleFeedback(void);
 static void Param_Calib_ApplyDuty(void);
+static void Fault_Now_Handle(void);
 /**
  * @brief  高频任务（tim1定时器触发16khz+）
  */
@@ -47,6 +52,14 @@ void High_Frequency_Task(void)
                 Offset_Encoder_Handle();
                 break;
 
+            case AXIS_STATE_CURRENT_AUTOTUNE:
+                CurrAutoTune_Handle();
+                break;
+
+            case AXIS_STATE_SPEED_AUTOTUNE:
+                SpeedAutoTune_Handle();
+                break;
+
             case AXIS_STATE_PARAM_CALIB:
                 Param_Calib_Handle();
                 break;
@@ -57,8 +70,7 @@ void High_Frequency_Task(void)
 
             case AXIS_STATE_FAULT_NOW:
             case AXIS_STATE_FAULT_OVER:
-                SwitchOff_PWM(g_axis.pPWMCHandle);
-				//DRV8353_UpdateFaultStatus();
+                Fault_Now_Handle();
                 break;
 
             default:
@@ -101,23 +113,35 @@ void MC_Calib_Init(void)
 
 MC_RetStatus_t MC_Calib_StartChain(void)
 {
+	if (g_axis.state == AXIS_STATE_RUN)
+	{
+		(void)MC_Stop_Motor();
+	}
+
 	if (g_axis.state != AXIS_STATE_IDLE)
 	{
 		return MC_FAILED;
 	}
 
 	g_mc_calib_go_run_after_finish = 0U;
+	MC_Reset_Control_State();
+	CurrAutoTune_Start();
+	g_bStartSpeedAutoTune = false;
+	g_bStartCurrentAutoTune = true;
 	g_axis.state = AXIS_STATE_OFFSET_CALIB;
 	return MC_SUCCESS;
 }
 
 MC_RetStatus_t MC_Calib_StartParam(ParamIdStep_t step)
 {
-	ParamIdRet_t ret;
-
 	if (step != PARAM_ID_STEP_ALL)
 	{
 		return MC_FAILED;
+	}
+
+	if (g_axis.state == AXIS_STATE_RUN)
+	{
+		(void)MC_Stop_Motor();
 	}
 
 	if (g_axis.state != AXIS_STATE_IDLE)
@@ -125,18 +149,13 @@ MC_RetStatus_t MC_Calib_StartParam(ParamIdStep_t step)
 		return MC_FAILED;
 	}
 
-	if (g_axis.posCtrl.bCalibFlag == false)
-	{
-		return MC_FAILED;
-	}
-
-	ret = ParamId_ModuleStart(step);
-	if (ret != PARAM_ID_OK)
-	{
-		return MC_FAILED;
-	}
-
-	g_axis.state = AXIS_STATE_PARAM_CALIB;
+	g_mc_calib_go_run_after_finish = 0U;
+	MC_Reset_Control_State();
+	SpeedAutoTune_Start(SPEED_AUTOTUNE_DEFAULT_CURRENT_A);
+	CurrAutoTune_Start();
+	g_bStartCurrentAutoTune = true;
+	g_bStartSpeedAutoTune = true;
+	g_axis.state = AXIS_STATE_OFFSET_CALIB;
 	return MC_SUCCESS;
 }
 
@@ -149,7 +168,23 @@ MC_RetStatus_t MC_Calib_StopParam(void)
 		return MC_FAILED;
 	}
 
-	if (g_axis.state == AXIS_STATE_PARAM_CALIB)
+	if (g_bStartCurrentAutoTune)
+	{
+		CurrAutoTune_Abort();
+	}
+	if (g_bStartSpeedAutoTune)
+	{
+		SpeedAutoTune_Abort();
+	}
+	g_bStartCurrentAutoTune = false;
+	g_bStartSpeedAutoTune = false;
+	g_mc_calib_go_run_after_finish = 0U;
+
+	if (g_axis.state == AXIS_STATE_PARAM_CALIB ||
+		g_axis.state == AXIS_STATE_CURRENT_AUTOTUNE ||
+		g_axis.state == AXIS_STATE_SPEED_AUTOTUNE ||
+		g_axis.state == AXIS_STATE_OFFSET_CALIB ||
+		g_axis.state == AXIS_STATE_ENCODER_CALIB)
 	{
 		g_axis.state = AXIS_STATE_IDLE;
 	}
@@ -159,7 +194,31 @@ MC_RetStatus_t MC_Calib_StopParam(void)
 
 ParamIdState_t MC_Calib_GetParamState(void)
 {
-	return ParamId_ModuleGetState();
+	ParamIdState_t legacyState = ParamId_ModuleGetState();
+
+	if (legacyState != PARAM_ID_STATE_IDLE &&
+		legacyState != PARAM_ID_STATE_DONE &&
+		legacyState != PARAM_ID_STATE_FAULT)
+	{
+		return legacyState;
+	}
+
+	switch (g_axis.state)
+	{
+		case AXIS_STATE_OFFSET_CALIB:
+		case AXIS_STATE_ENCODER_CALIB:
+			return PARAM_ID_STATE_PREPARE;
+		case AXIS_STATE_CURRENT_AUTOTUNE:
+		case AXIS_STATE_SPEED_AUTOTUNE:
+		case AXIS_STATE_RUN:
+		case AXIS_STATE_PARAM_CALIB:
+			return PARAM_ID_STATE_RUN;
+		case AXIS_STATE_FAULT_NOW:
+		case AXIS_STATE_FAULT_OVER:
+			return PARAM_ID_STATE_FAULT;
+		default:
+			return legacyState;
+	}
 }
 
 const ParamIdResult_t *MC_Calib_GetParamResult(void)
@@ -199,7 +258,7 @@ void Offset_Calib_Handle()
 	}
 	else
 	{
-		Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
+		Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas, NULL);
 
 		g_axis.pPWMCHandle->uCalibCount++;
 		g_axis.pPWMCHandle->fCalibRsum += FIXP30_toF(g_axis.currCtrl.IrstMeas.R) * CURRENT_SCALE;
@@ -273,7 +332,15 @@ void Offset_Encoder_Handle()
 		g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
 		PIDREG_SPEED_setUi_pu(&g_axis.speedCtrl.PIDSpeed, FIXP30(0.0f));
 		g_mc_calib_done_once = 1U;
-		if (g_mc_calib_go_run_after_finish != 0U)
+		if (g_bStartCurrentAutoTune)
+		{
+			g_axis.state = AXIS_STATE_CURRENT_AUTOTUNE;
+		}
+		else if (g_bStartSpeedAutoTune)
+		{
+			g_axis.state = AXIS_STATE_SPEED_AUTOTUNE;
+		}
+		else if (g_mc_calib_go_run_after_finish != 0U)
 		{
 			g_mc_calib_go_run_after_finish = 0U;
 			g_axis.state = AXIS_STATE_RUN;
@@ -315,7 +382,7 @@ static void Param_Calib_SampleFeedback(void)
 	FIXP_CosSin_t cossinPark;
 
 	Get_Vbus_Measurements(g_axis.pPWMCHandle, &g_axis.busVoltage);
-	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
+	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas, &g_axis.VotlMeas.VrstMeas);
 
 	Get_Angle(&anglePark_pu);
 	FIXP30_CosSinPU(anglePark_pu, &cossinPark);
@@ -357,6 +424,34 @@ void Run_Handle()
 
 }
 
+static void Fault_Now_Handle(void)
+{
+	SwitchOff_PWM(g_axis.pPWMCHandle);
+
+	if (g_bStartCurrentAutoTune)
+	{
+		CurrAutoTune_Abort();
+	}
+	if (g_bStartSpeedAutoTune)
+	{
+		SpeedAutoTune_Abort();
+	}
+
+	if (ParamId_ModuleGetState() != PARAM_ID_STATE_IDLE &&
+		ParamId_ModuleGetState() != PARAM_ID_STATE_DONE &&
+		ParamId_ModuleGetState() != PARAM_ID_STATE_FAULT)
+	{
+		(void)MC_Calib_StopParam();
+	}
+
+	g_mc_calib_go_run_after_finish = 0U;
+	g_axis.posCtrl.bCalibFlag = false;
+	g_axis.posCtrl.uCalibCount = 0;
+	PIDREGDQX_CURRENT_setUiD_pu(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(0.0f));
+	PIDREGDQX_CURRENT_setUiQ_pu(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(0.0f));
+	PIDREG_SPEED_setUi_pu(&g_axis.speedCtrl.PIDSpeed, FIXP30(0.0f));
+}
+
 /**
  * @brief 执行FOC的核心，即用于直流电流调节的控制器。参考坐标系变换根据主动速度传感器进行
  * @retval 如果FOC在下一个PWM更新事件之前结束，则返回MC_NO_FAULTS,否则返可MC_DURATION。
@@ -375,17 +470,16 @@ inline uint16_t FOC_Controller(void)
 	if (iCount == 16)
 	{
 		iCount = 0;
-		Speed_Loop();
+		/* legacy call removed */
 	}
 
 	// 开环自增、减角度处理
 
 	// 获取三相电流
-	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas);
+	Get_RST_Measurements(g_axis.pPWMCHandle, &g_axis.currCtrl.IrstMeas, NULL);
 
 	// 电流环
 
 	// 空间矢量调制
-	SetPhaseDuty(g_axis.pPWMCHandle);
-	return;
+	return FOC_Control();
 }

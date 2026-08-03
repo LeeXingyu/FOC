@@ -11,6 +11,17 @@
 #include "fixpmath.h"
 #include "stm32g4xx_hal.h"
 
+#define SetPWMCompareA LL_TIM_OC_SetCompareCH3
+#define SetPWMCompareB LL_TIM_OC_SetCompareCH2
+#define SetPWMCompareC LL_TIM_OC_SetCompareCH1
+
+#define LL_TIM_CHANNEL_HIGH_A LL_TIM_CHANNEL_CH3
+#define LL_TIM_CHANNEL_HIGH_B LL_TIM_CHANNEL_CH2
+#define LL_TIM_CHANNEL_HIGH_C LL_TIM_CHANNEL_CH1
+#define LL_TIM_CHANNEL_LOW_A LL_TIM_CHANNEL_CH3N
+#define LL_TIM_CHANNEL_LOW_B LL_TIM_CHANNEL_CH2N
+#define LL_TIM_CHANNEL_LOW_C LL_TIM_CHANNEL_CH1N
+
 /**
   * @brief 姝ょ粨鏋勭敤浜庡鐞哖WM涓庣數娴佸弽棣堢粍浠跺疄渚嬬殑鏁版嵁
   *
@@ -151,7 +162,9 @@ void Get_Vbus_Measurements(PWMC_Handle_t * pHandle, fixp30_t* pBusVoltage);
 /**
   * @brief  鑾峰彇涓夌浉鐢垫祦娴嬮噺鍊?  * @param  pCurrCtrl 鐢垫祦鎺у埗鍙ユ焺
   */
-void Get_RST_Measurements(PWMC_Handle_t * pHandle, Currents_Irst_t *pIrstMeas);
+void Get_RST_Measurements(PWMC_Handle_t * pHandle,
+                          Currents_Irst_t *pIrstMeas,
+                          Voltages_Urst_t *pVrstMeas);
 
 /**
   * @brief  涓€闃朵綆閫氭护娉㈣繃婊ょ數娴?  * @param  pFilterCurr 杩囨护鐢垫祦

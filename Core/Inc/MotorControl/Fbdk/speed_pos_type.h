@@ -5,10 +5,18 @@
 
 typedef struct
 {
-    uint32_t uAngleRawNative;
+    union
+    {
+        uint32_t uAngleRawNative;
+        uint32_t uAngleRaw;
+    };
     float fAngle;
     float fOffsetAngle;
-    uint32_t uOffsetAngleRawNative;
+    union
+    {
+        uint32_t uOffsetAngleRawNative;
+        uint32_t uOffsetAngleRaw;
+    };
     float fSpeed;
     float fSpeedPll;
     float fSpeedKalman;

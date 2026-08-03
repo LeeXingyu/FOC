@@ -9,6 +9,7 @@
 #include "main.h"
 #include "motor_parameters.h"
 #include "MotorControl/Fbdk/speed_pos_fbdk.h"
+#include "pidregdqx_current.h"
 #include "Utils/Pid/pidreg_speed.h"
 #include <math.h>
 
@@ -101,6 +102,21 @@ void MC_Set_Duty_Cycle(Duty_Ddq_t dutyCycle)
 {
 	g_axis.currCtrl.refIdq.D = dutyCycle.D;
 	g_axis.currCtrl.refIdq.Q = dutyCycle.Q;
+}
+
+void MC_Reset_Control_State(void)
+{
+	MC_Set_Speed_Reference(0.0f);
+	g_axis.currCtrl.refIdq.D = FIXP30(0.0f);
+	g_axis.currCtrl.refIdq.Q = FIXP30(0.0f);
+	g_axis.currCtrl.outIdq.D = FIXP30(0.0f);
+	g_axis.currCtrl.outIdq.Q = FIXP30(0.0f);
+	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
+	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
+	PIDREGDQX_CURRENT_setUiD_pu(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(0.0f));
+	PIDREGDQX_CURRENT_setUiQ_pu(&g_axis.currCtrl.pid_IdIqX_obj, FIXP30(0.0f));
+	PIDREG_SPEED_setUi_pu(&g_axis.speedCtrl.PIDSpeed, FIXP30(0.0f));
+	SpeedPos_ResetEstimator();
 }
 
 void MC_Set_Speed_Ramp(float fRamp)

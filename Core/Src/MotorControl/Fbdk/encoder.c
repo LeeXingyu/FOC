@@ -1,7 +1,11 @@
 #include "encoder.h"
 #include "speed_pos_type.h"
+#include "main.h"
 #include "stm32g4xx_hal.h"
 #include "motor_parameters.h"
+#include "as5047p.h"
+#include "kth7824.h"
+#include "mt6835.h"
 
 extern SPI_HandleTypeDef hspi1;
 extern SPI_HandleTypeDef hspi3;

@@ -367,14 +367,11 @@ static CanCmdStatus_t Can_SetModeVf(const uint8_t *data, uint8_t len, uint8_t *e
 
 static CanCmdStatus_t Can_SetPolePairs(const uint8_t *data, uint8_t len, uint8_t *extra)
 {
-    ParamIdState_t paramState = MC_Calib_GetParamState();
     uint8_t polePairs;
     (void)len;
     (void)extra;
 
-    if (paramState == PARAM_ID_STATE_PREPARE ||
-        paramState == PARAM_ID_STATE_LOCK_CHECK ||
-        paramState == PARAM_ID_STATE_RUN)
+    if (g_axis.state != AXIS_STATE_IDLE)
     {
         return CAN_CMD_STATUS_BUSY;
     }
@@ -420,9 +417,7 @@ static CanCmdStatus_t Can_CalibStart(const uint8_t *data, uint8_t len, uint8_t *
         return CAN_CMD_STATUS_OK;
     }
 
-    if (MC_Calib_GetParamState() == PARAM_ID_STATE_PREPARE ||
-        MC_Calib_GetParamState() == PARAM_ID_STATE_LOCK_CHECK ||
-        MC_Calib_GetParamState() == PARAM_ID_STATE_RUN)
+    if (g_axis.state != AXIS_STATE_IDLE)
     {
         return CAN_CMD_STATUS_BUSY;
     }

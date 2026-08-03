@@ -302,7 +302,9 @@ void Get_Vbus_Measurements(PWMC_Handle_t * pHandle, fixp30_t* pBusVoltage)
   * @brief  获取三相电流测量值
   * @param  pIrst 三相电流测量值
   */
-void Get_RST_Measurements(PWMC_Handle_t * pHandle, Currents_Irst_t *pIrstMeas)
+void Get_RST_Measurements(PWMC_Handle_t * pHandle,
+                          Currents_Irst_t *pIrstMeas,
+                          Voltages_Urst_t *pVrstMeas)
 {
 	uint16_t uAdcIrValue = LL_ADC_INJ_ReadConversionData12(ADC1, LL_ADC_INJ_RANK_1) >> 4;
 	float fCurrR = CURR_CONV_OFFSET - CURR_CONV_SCALE * (float)uAdcIrValue;
@@ -321,6 +323,16 @@ void Get_RST_Measurements(PWMC_Handle_t * pHandle, Currents_Irst_t *pIrstMeas)
 	pIrstMeas->R = FIXP30(fCurrR / (float)CURRENT_SCALE);
 	pIrstMeas->S = FIXP30(fCurrS / (float)CURRENT_SCALE);
 	pIrstMeas->T = FIXP30(fCurrt / (float)CURRENT_SCALE);
+
+	if (pVrstMeas != NULL)
+	{
+		/*
+		 * Use the commanded centered duty vector as the voltage feedback proxy.
+		 * This keeps the sg autotune path compatible without requiring a second
+		 * calibrated voltage-sense model in 0512.
+		 */
+		*pVrstMeas = pHandle->drstOut_pu;
+	}
 
 	Curr_Offset_Handle(pHandle, pIrstMeas);
 

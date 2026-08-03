@@ -563,7 +563,19 @@ static void CDC_HandleCanLikeCommand(uint8_t func, uint8_t node, const uint8_t *
         case 0x0AU:
             if (len == 1U)
             {
-                MC_RetStatus_t ret = (payload[0] == 0U) ? MC_Calib_StartChain() : MC_Calib_StartParam(PARAM_ID_STEP_ALL);
+                MC_RetStatus_t ret;
+                if (payload[0] == 0U)
+                {
+                    ret = MC_Calib_StartChain();
+                }
+                else if (payload[0] == 5U)
+                {
+                    ret = MC_Calib_StartParam(PARAM_ID_STEP_ALL);
+                }
+                else
+                {
+                    ret = MC_FAILED;
+                }
                 CDC_SendFormat((ret == MC_SUCCESS) ? "DBG CMD 0x%03X calib=%u\r\n" : "DBG ERR 0x%03X calib\r\n",
                                sid,
                                payload[0]);
