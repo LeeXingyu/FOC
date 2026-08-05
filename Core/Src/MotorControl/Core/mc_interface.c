@@ -33,6 +33,9 @@ MC_RetStatus_t MC_Start_Motor(void)
 		return MC_FAILED;
 	}
 
+	g_mc_calib_go_run_after_finish = 1U;
+	g_bStartCurrentAutoTune = false;
+	g_bStartSpeedAutoTune = false;
 	MC_Set_Speed_Reference(0.0f);
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
@@ -40,16 +43,13 @@ MC_RetStatus_t MC_Start_Motor(void)
 	PIDREG_SPEED_setUi_pu(&g_axis.speedCtrl.PIDSpeed, FIXP30(0.0f));
 	SpeedPos_ResetEstimator();
 
-	if (g_mc_calib_done_once != 0U)
+	if ((g_mc_calib_done_once != 0U) && g_axis.posCtrl.bCalibFlag)
 	{
-		g_mc_calib_go_run_after_finish = 0U;
 		g_axis.state = AXIS_STATE_RUN;
+		return MC_SUCCESS;
 	}
-	else
-	{
-		g_mc_calib_go_run_after_finish = 1U;
-		g_axis.state = AXIS_STATE_OFFSET_CALIB;
-	}
+
+	g_axis.state = AXIS_STATE_OFFSET_CALIB;
 	return MC_SUCCESS;
 }
 
@@ -59,6 +59,8 @@ MC_RetStatus_t MC_Start_Motor(void)
 MC_RetStatus_t MC_Stop_Motor(void)
 {
 	g_mc_calib_go_run_after_finish = 0U;
+	g_bStartCurrentAutoTune = false;
+	g_bStartSpeedAutoTune = false;
 	MC_Set_Speed_Reference(0.0f);
 	g_axis.speedCtrl.speedRefRamp_pu = FIXP30(0.0f);
 	g_axis.speedCtrl.iqOut_pu = FIXP30(0.0f);
@@ -75,6 +77,12 @@ MC_RetStatus_t MC_Stop_Motor(void)
   */
 void MC_Set_Control_Mode(ControlMode_En enControlMode)
 {
+	if (g_axis.enCtrlMode == enControlMode)
+	{
+		return;
+	}
+
+	MC_Reset_Control_State();
 	g_axis.enCtrlMode = enControlMode;
 }
 

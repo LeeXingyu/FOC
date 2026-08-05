@@ -39,6 +39,162 @@ namespace
 {
 QString fmt6(double v) { return QString::number(v, 'f', 6); }
 
+double currentPlotTimeSeconds(qint64 *baseMs)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if ((baseMs == nullptr) || (*baseMs == 0))
+    {
+        if (baseMs != nullptr)
+        {
+            *baseMs = now;
+        }
+        return 0.0;
+    }
+
+    return (double)(now - *baseMs) / 1000.0;
+}
+
+constexpr int kCia402ModeProfilePosition = 1;
+constexpr int kCia402ModeProfileVelocity = 3;
+constexpr int kCia402ModeProfileTorque = 4;
+constexpr int kCia402ModeCyclicSyncPosition = 8;
+constexpr int kCia402ModeCyclicSyncVelocity = 9;
+constexpr int kCia402ModeCyclicSyncTorque = 10;
+constexpr double kLiveChartWindowSeconds = 30.0;
+
+int findLiveWindowStart(const QVector<QPointF> &points, double windowSeconds)
+{
+    if (points.isEmpty())
+    {
+        return 0;
+    }
+
+    const double firstX = points.first().x();
+    const double lastX = points.last().x();
+    const double startX = qMax(firstX, lastX - windowSeconds);
+    int startIndex = 0;
+    while ((startIndex + 1) < points.size() && points.at(startIndex).x() < startX)
+    {
+        ++startIndex;
+    }
+    return startIndex;
+}
+
+QString fmtHex16(unsigned int value)
+{
+    return QStringLiteral("0x%1").arg(value, 4, 16, QLatin1Char('0')).toUpper();
+}
+
+QString decodeCia402State(unsigned int statusword)
+{
+    if ((statusword & 0x004FU) == 0x0000U)
+    {
+        return QStringLiteral("Not Ready");
+    }
+    if ((statusword & 0x004FU) == 0x0040U)
+    {
+        return QStringLiteral("Switch On Disabled");
+    }
+    if ((statusword & 0x006FU) == 0x0021U)
+    {
+        return QStringLiteral("Ready To Switch On");
+    }
+    if ((statusword & 0x006FU) == 0x0023U)
+    {
+        return QStringLiteral("Switched On");
+    }
+    if ((statusword & 0x006FU) == 0x0027U)
+    {
+        return QStringLiteral("Operation Enabled");
+    }
+    if ((statusword & 0x006FU) == 0x0007U)
+    {
+        return QStringLiteral("Quick Stop Active");
+    }
+    if ((statusword & 0x004FU) == 0x000FU)
+    {
+        return QStringLiteral("Fault Reaction Active");
+    }
+    if ((statusword & 0x004FU) == 0x0008U)
+    {
+        return QStringLiteral("Fault");
+    }
+    return QStringLiteral("Unknown");
+}
+
+QString decodeCia402Mode(unsigned int mode)
+{
+    switch ((int)mode)
+    {
+    case kCia402ModeProfilePosition: return QStringLiteral("Profile Position");
+    case kCia402ModeProfileVelocity: return QStringLiteral("Profile Velocity");
+    case kCia402ModeProfileTorque: return QStringLiteral("Profile Torque");
+    case kCia402ModeCyclicSyncPosition: return QStringLiteral("Cyclic Sync Position");
+    case kCia402ModeCyclicSyncVelocity: return QStringLiteral("Cyclic Sync Velocity");
+    case kCia402ModeCyclicSyncTorque: return QStringLiteral("Cyclic Sync Torque");
+    default: return QStringLiteral("Unknown");
+    }
+}
+
+QString decodeControlMode(unsigned int mode)
+{
+    switch (mode)
+    {
+    case 0U: return QStringLiteral("Torque");
+    case 1U: return QStringLiteral("Speed");
+    case 2U: return QStringLiteral("Position");
+    case 3U: return QStringLiteral("Open Loop");
+    default: return QStringLiteral("Unknown");
+    }
+}
+
+QString decodeAxisState(unsigned int state)
+{
+    switch (state)
+    {
+    case 0U: return QStringLiteral("Undefined");
+    case 1U: return QStringLiteral("Idle");
+    case 2U: return QStringLiteral("Offset Calib");
+    case 3U: return QStringLiteral("Encoder Calib");
+    case 4U: return QStringLiteral("Param Calib");
+    case 5U: return QStringLiteral("Run");
+    case 6U: return QStringLiteral("Fault Now");
+    case 7U: return QStringLiteral("Fault Over");
+    case 8U: return QStringLiteral("Current Tune");
+    case 9U: return QStringLiteral("Speed Tune");
+    default: return QStringLiteral("Unknown");
+    }
+}
+
+QString decodeParamState(unsigned int state)
+{
+    switch (state)
+    {
+    case 0U: return QStringLiteral("Idle");
+    case 1U: return QStringLiteral("Prepare");
+    case 2U: return QStringLiteral("Lock Check");
+    case 3U: return QStringLiteral("Run");
+    case 4U: return QStringLiteral("Done");
+    case 5U: return QStringLiteral("Fault");
+    default: return QStringLiteral("Unknown");
+    }
+}
+
+QString decodeErrorState(unsigned int err)
+{
+    if (err == 0U)
+    {
+        return QStringLiteral("No Error");
+    }
+    return QStringLiteral("Fault Active");
+}
+
+QString formatDecodedUInt(unsigned int value, const QString &desc, bool hexValue = false)
+{
+    const QString valueText = hexValue ? fmtHex16(value) : QString::number(value);
+    return QStringLiteral("%1 (%2)").arg(valueText, desc);
+}
+
 static void trimPointBuffer(QVector<QPointF> &points, int maxPoints, int dropChunk = 256)
 {
     if (points.size() <= maxPoints)
@@ -165,6 +321,14 @@ MainWindow::MainWindow(QWidget *parent)
             return;
         }
         const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if ((now - m_lastChartRefreshTick) >= 50)
+        {
+            refreshAngleChart();
+            refreshSpeedChart();
+            refreshIqRefChart();
+            refreshSpeedMeasChart();
+            m_lastChartRefreshTick = now;
+        }
         if ((m_lastTelemetryTick != 0) && ((now - m_lastTelemetryTick) > 1000))
         {
             m_statusLink->setText(tr("Waiting telemetry..."));
@@ -232,7 +396,7 @@ void MainWindow::setupUi()
     setupIqRefPage(m_iqRefPage);
     setupSpeedMeasPage(m_speedMeasPage);
     setupDebugPage(m_debugPage);
-    m_tabs->addTab(m_controlPage, tr("Control"));
+    m_tabs->addTab(m_controlPage, tr("Device"));
     m_tabs->addTab(m_anglePage, tr("Angle"));
     m_tabs->addTab(m_speedPage, tr("Speed"));
     m_tabs->addTab(m_iqRefPage, tr("Iq Compare"));
@@ -290,6 +454,31 @@ void MainWindow::setupControlPage(QWidget *page)
     m_flowCombo->addItems({tr("None"), tr("RTS/CTS"), tr("XON/XOFF")});
     m_autoScrollCheck->setChecked(true);
     m_autoTxNewlineCheck->setChecked(true);
+    const auto normalizeConnectionWidget = [](QWidget *widget) {
+        if (widget == nullptr)
+        {
+            return;
+        }
+        widget->setMinimumHeight(24);
+        widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    };
+    const QList<QWidget *> connectionWidgets = {
+        m_portCombo, m_refreshButton, m_openButton, m_baudCombo,
+        m_dataBitsCombo, m_parityCombo, m_stopBitsCombo, m_flowCombo,
+        m_hexSendCheck, m_hexViewCheck, m_autoScrollCheck, m_autoTxNewlineCheck
+    };
+    for (QWidget *widget : connectionWidgets)
+    {
+        normalizeConnectionWidget(widget);
+    }
+    m_refreshButton->setToolTip(tr("Refresh the local serial port list."));
+    m_openButton->setToolTip(tr("Open or close the selected CDC port."));
+    m_portCombo->setToolTip(tr("Select the USB CDC port exposed by the controller."));
+    m_baudCombo->setToolTip(tr("Default serial baud rate for this tool."));
+    m_hexSendCheck->setToolTip(tr("Send manual Tx text as hex bytes instead of ASCII."));
+    m_hexViewCheck->setToolTip(tr("Show received serial data in hex format."));
+    m_autoScrollCheck->setToolTip(tr("Keep the receive log pinned to the newest line."));
+    m_autoTxNewlineCheck->setToolTip(tr("Append newline automatically when sending manual commands."));
 
     connGrid->addWidget(new QLabel(tr("Port"), connGroup), 0, 0);
     connGrid->addWidget(m_portCombo, 0, 1);
@@ -310,77 +499,102 @@ void MainWindow::setupControlPage(QWidget *page)
     connGrid->addWidget(m_autoScrollCheck, 4, 0);
     connGrid->addWidget(m_autoTxNewlineCheck, 4, 1);
 
-    auto *presetGroup = new QGroupBox(tr("CDC Commands"), page);
+    auto *presetGroup = new QGroupBox(tr("Maintenance"), page);
     auto *presetGrid = new QGridLayout(presetGroup);
-    m_speedSpin = new QDoubleSpinBox(presetGroup);
-    m_speedSpin->setRange(-5000.0, 5000.0);
-    m_speedSpin->setDecimals(2);
-    m_speedSpin->setSingleStep(10.0);
-    m_speedSpin->setValue(100.0);
-
     m_kpSpin = new QDoubleSpinBox(presetGroup);
     m_kpSpin->setRange(0.0, 1000.0);
     m_kpSpin->setDecimals(4);
     m_kpSpin->setSingleStep(0.01);
-    m_kpSpin->setValue(1.0);
+    m_kpSpin->setValue(0.39);
 
     m_kiSpin = new QDoubleSpinBox(presetGroup);
     m_kiSpin->setRange(0.0, 10000.0);
     m_kiSpin->setDecimals(4);
     m_kiSpin->setSingleStep(0.5);
-    m_kiSpin->setValue(4.0);
+    m_kiSpin->setValue(0.874);
 
     m_nodeIdSpin = new QSpinBox(presetGroup);
     m_nodeIdSpin->setRange(0, 15);
     m_nodeIdSpin->setValue(1);
 
-    m_calibModeSpin = new QSpinBox(presetGroup);
-    m_calibModeSpin->setRange(0, 255);
-    m_calibModeSpin->setValue(5);
-
-    m_startButton = new QPushButton(tr("Start"), presetGroup);
-    m_stopButton = new QPushButton(tr("Stop"), presetGroup);
-    m_speedModeButton = new QPushButton(tr("Speed Mode"), presetGroup);
-    m_posModeButton = new QPushButton(tr("Position Mode"), presetGroup);
-    m_openLoopButton = new QPushButton(tr("Open Loop"), presetGroup);
-    m_setSpeedButton = new QPushButton(tr("Set Speed"), presetGroup);
     m_setKpButton = new QPushButton(tr("Set Kp"), presetGroup);
     m_setKiButton = new QPushButton(tr("Set Ki"), presetGroup);
     m_getIdButton = new QPushButton(tr("Get ID"), presetGroup);
-    m_setIdButton = new QPushButton(tr("Set ID"), presetGroup);
-    m_startCalibButton = new QPushButton(tr("Start Calib"), presetGroup);
-    m_stopCalibButton = new QPushButton(tr("Stop Calib"), presetGroup);
+    m_setIdButton = new QPushButton(tr("Set ID (RAM)"), presetGroup);
+    m_startButton = new QPushButton(tr("Quick Start"), presetGroup);
+    m_stopButton = new QPushButton(tr("Quick Stop"), presetGroup);
+    m_startRsTuneButton = new QPushButton(tr("Start Current Tune"), presetGroup);
+    m_startFullTuneButton = new QPushButton(tr("Measure Params"), presetGroup);
+    m_stopCalibButton = new QPushButton(tr("Stop Tune"), presetGroup);
     m_readFlashButton = new QPushButton(tr("Read Flash"), presetGroup);
     m_clearFlashButton = new QPushButton(tr("Clear Flash"), presetGroup);
+    m_readFlashButton->setEnabled(false);
+    m_clearFlashButton->setEnabled(false);
+    m_readFlashButton->setToolTip(tr("Flash persistence is disabled in the current firmware."));
+    m_clearFlashButton->setToolTip(tr("Flash persistence is disabled in the current firmware."));
+    m_setIdButton->setToolTip(tr("Applies the node ID in RAM only. It is not saved to flash."));
+    m_startRsTuneButton->setToolTip(tr("Starts the current autotune chain only."));
+    m_startFullTuneButton->setToolTip(tr("Starts the full motor-parameter measurement chain."));
+    m_stopCalibButton->setToolTip(tr("Stops the active tuning flow."));
+    m_kpSpin->setToolTip(tr("Speed loop Kp in the current firmware unit."));
+    m_kiSpin->setToolTip(tr("Speed loop Ki in the current firmware unit."));
+    m_startButton->setToolTip(tr("Quick shortcut for CiA402 start controlword."));
+    m_stopButton->setToolTip(tr("Quick shortcut for CiA402 stop controlword."));
+    m_getIdButton->setToolTip(tr("Read the current node ID from the device."));
+    m_setKpButton->setToolTip(tr("Write the speed-loop Kp parameter to the running device."));
+    m_setKiButton->setToolTip(tr("Write the speed-loop Ki parameter to the running device."));
 
-    presetGrid->addWidget(new QLabel(tr("Speed rpm"), presetGroup), 0, 0);
-    presetGrid->addWidget(m_speedSpin, 0, 1);
-    presetGrid->addWidget(m_setSpeedButton, 0, 2);
-    presetGrid->addWidget(new QLabel(tr("Speed Kp"), presetGroup), 1, 0);
-    presetGrid->addWidget(m_kpSpin, 1, 1);
-    presetGrid->addWidget(m_setKpButton, 1, 2);
-    presetGrid->addWidget(new QLabel(tr("Speed Ki"), presetGroup), 2, 0);
-    presetGrid->addWidget(m_kiSpin, 2, 1);
-    presetGrid->addWidget(m_setKiButton, 2, 2);
-    presetGrid->addWidget(new QLabel(tr("Node ID"), presetGroup), 3, 0);
-    presetGrid->addWidget(m_nodeIdSpin, 3, 1);
-    presetGrid->addWidget(m_getIdButton, 3, 2);
-    presetGrid->addWidget(new QLabel(tr("Calib mode"), presetGroup), 4, 0);
-    presetGrid->addWidget(m_calibModeSpin, 4, 1);
-    presetGrid->addWidget(m_setIdButton, 4, 2);
-    presetGrid->addWidget(m_startButton, 5, 0);
-    presetGrid->addWidget(m_stopButton, 5, 1);
-    presetGrid->addWidget(m_speedModeButton, 5, 2);
-    presetGrid->addWidget(m_posModeButton, 6, 0);
-    presetGrid->addWidget(m_openLoopButton, 6, 1);
-    presetGrid->addWidget(m_startCalibButton, 6, 2);
-    presetGrid->addWidget(m_stopCalibButton, 7, 0);
-    presetGrid->addWidget(m_readFlashButton, 7, 1);
-    presetGrid->addWidget(m_clearFlashButton, 7, 2);
+    presetGrid->addWidget(new QLabel(tr("Speed Kp"), presetGroup), 0, 0);
+    presetGrid->addWidget(m_kpSpin, 0, 1);
+    presetGrid->addWidget(m_setKpButton, 0, 2);
+    presetGrid->addWidget(new QLabel(tr("Speed Ki"), presetGroup), 1, 0);
+    presetGrid->addWidget(m_kiSpin, 1, 1);
+    presetGrid->addWidget(m_setKiButton, 1, 2);
+    presetGrid->addWidget(new QLabel(tr("Node ID"), presetGroup), 2, 0);
+    presetGrid->addWidget(m_nodeIdSpin, 2, 1);
+    presetGrid->addWidget(m_getIdButton, 2, 2);
+    presetGrid->addWidget(new QLabel(tr("Node ID apply"), presetGroup), 3, 0);
+    presetGrid->addWidget(m_setIdButton, 3, 1, 1, 2);
+    presetGrid->addWidget(new QLabel(tr("Quick motion"), presetGroup), 4, 0);
+    presetGrid->addWidget(m_startButton, 4, 1);
+    presetGrid->addWidget(m_stopButton, 4, 2);
+    presetGrid->addWidget(m_startRsTuneButton, 5, 0);
+    presetGrid->addWidget(m_startFullTuneButton, 5, 1);
+    presetGrid->addWidget(m_stopCalibButton, 5, 2);
+    presetGrid->addWidget(m_readFlashButton, 6, 0);
+    presetGrid->addWidget(m_clearFlashButton, 6, 1);
+
+    const auto normalizeMaintenanceWidget = [](QWidget *widget) {
+        if (widget == nullptr)
+        {
+            return;
+        }
+        widget->setMinimumHeight(24);
+        widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    };
+    const QList<QWidget *> maintenanceWidgets = {
+        m_kpSpin, m_kiSpin, m_nodeIdSpin, m_setKpButton, m_setKiButton,
+        m_getIdButton, m_setIdButton, m_startButton, m_stopButton,
+        m_startRsTuneButton, m_startFullTuneButton, m_stopCalibButton,
+        m_readFlashButton, m_clearFlashButton
+    };
+    for (QWidget *widget : maintenanceWidgets)
+    {
+        normalizeMaintenanceWidget(widget);
+    }
+    presetGrid->setColumnMinimumWidth(0, 120);
+    presetGrid->setColumnMinimumWidth(1, 120);
+    presetGrid->setColumnMinimumWidth(2, 120);
+
+    auto *cia402Panel = new QWidget(page);
+    setupCia402Page(cia402Panel);
 
     auto *ioRow = new QHBoxLayout();
     m_sendEdit = new QLineEdit(page);
     m_sendButton = new QPushButton(tr("Send"), page);
+    m_sendEdit->setPlaceholderText(tr("Manual text command, for example: cia402 status"));
+    m_sendEdit->setToolTip(tr("Manual command entry. Useful for protocol debugging or temporary commands not mapped to buttons."));
+    m_sendButton->setToolTip(tr("Send the manual text command to the device."));
     ioRow->addWidget(new QLabel(tr("Tx"), page));
     ioRow->addWidget(m_sendEdit, 1);
     ioRow->addWidget(m_sendButton);
@@ -388,8 +602,26 @@ void MainWindow::setupControlPage(QWidget *page)
     m_logEdit = new QTextEdit(page);
     m_logEdit->setReadOnly(true);
 
+    auto *bodyRow = new QHBoxLayout();
+    bodyRow->setSpacing(12);
+    presetGroup->setMaximumWidth(460);
+    cia402Panel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    const int bodyPanelHeight = qMax(presetGroup->sizeHint().height(), cia402Panel->sizeHint().height());
+    presetGroup->setFixedHeight(bodyPanelHeight);
+    cia402Panel->setFixedHeight(bodyPanelHeight);
+    const QList<QGroupBox *> cia402Groups =
+        cia402Panel->findChildren<QGroupBox *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QGroupBox *group : cia402Groups)
+    {
+        group->setFixedHeight(bodyPanelHeight);
+    }
+
+    bodyRow->addWidget(presetGroup, 0, Qt::AlignTop);
+    bodyRow->addWidget(cia402Panel, 1, Qt::AlignTop);
+
     root->addWidget(connGroup);
-    root->addWidget(presetGroup);
+    root->addLayout(bodyRow);
     root->addLayout(ioRow);
     root->addWidget(m_logEdit, 1);
 
@@ -398,17 +630,14 @@ void MainWindow::setupControlPage(QWidget *page)
     connect(m_sendButton, &QPushButton::clicked, this, &MainWindow::sendData);
     connect(m_sendEdit, &QLineEdit::returnPressed, this, &MainWindow::sendData);
 
-    connect(m_startButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("start"); });
-    connect(m_stopButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("stop"); });
-    connect(m_speedModeButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("speedmode"); });
-    connect(m_posModeButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("posmode"); });
-    connect(m_openLoopButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("vfmode"); });
-    connect(m_setSpeedButton, &QPushButton::clicked, this, [this]() { sendPresetCommand(QStringLiteral("speed %1").arg(m_speedSpin->value(), 0, 'f', 3)); });
-    connect(m_setKpButton, &QPushButton::clicked, this, [this]() { sendPresetCommand(QStringLiteral("kp %1").arg(m_kpSpin->value(), 0, 'f', 4)); });
-    connect(m_setKiButton, &QPushButton::clicked, this, [this]() { sendPresetCommand(QStringLiteral("ki %1").arg(m_kiSpin->value(), 0, 'f', 4)); });
+    connect(m_setKpButton, &QPushButton::clicked, this, [this]() { sendPresetCommand(QStringLiteral("sp %1").arg(m_kpSpin->value(), 0, 'f', 4)); });
+    connect(m_setKiButton, &QPushButton::clicked, this, [this]() { sendPresetCommand(QStringLiteral("si %1").arg(m_kiSpin->value(), 0, 'f', 4)); });
     connect(m_getIdButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("nodeget"); });
     connect(m_setIdButton, &QPushButton::clicked, this, [this]() { sendPresetCommand(QStringLiteral("nodeset %1").arg(m_nodeIdSpin->value())); });
-    connect(m_startCalibButton, &QPushButton::clicked, this, [this]() { sendPresetCommand(QStringLiteral("calib %1").arg(m_calibModeSpin->value())); });
+    connect(m_startButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("cia402 cw 15"); });
+    connect(m_stopButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("cia402 cw 0"); });
+    connect(m_startRsTuneButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("calib 0"); });
+    connect(m_startFullTuneButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("paramstart"); });
     connect(m_stopCalibButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("calibstop"); });
     connect(m_readFlashButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("flashread"); });
     connect(m_clearFlashButton, &QPushButton::clicked, this, [this]() { sendPresetCommand("flashclear"); });
@@ -444,12 +673,12 @@ void MainWindow::setupAnglePage(QWidget *page)
     m_angleAxisY = qobject_cast<QValueAxis *>(chart->axes(Qt::Vertical).first());
     if (m_angleAxisX != nullptr)
     {
-        m_angleAxisX->setTitleText(tr("Sample"));
+        m_angleAxisX->setTitleText(tr("Time (s)"));
     }
     if (m_angleAxisY != nullptr)
     {
         m_angleAxisY->setTitleText(tr("Angle deg"));
-        m_angleAxisY->setRange(-370.0, 370.0);
+        m_angleAxisY->setRange(0.0, 360.0);
         m_angleAxisY->setTickCount(11);
         m_angleAxisY->setLabelFormat("%.1f");
         m_angleAxisY->setReverse(false);
@@ -521,13 +750,16 @@ void MainWindow::setupSpeedPage(QWidget *page)
     auto *chart = new QChart();
     m_speedSeries = new QLineSeries(page);
     m_speedSeries->setName(tr("Speed RPM"));
+    m_speedRefSeries = new QLineSeries(page);
+    m_speedRefSeries->setName(tr("Speed Ref RPM"));
     chart->addSeries(m_speedSeries);
+    chart->addSeries(m_speedRefSeries);
     chart->createDefaultAxes();
     m_speedAxisX = qobject_cast<QValueAxis *>(chart->axes(Qt::Horizontal).first());
     m_speedAxisY = qobject_cast<QValueAxis *>(chart->axes(Qt::Vertical).first());
     if (m_speedAxisX != nullptr)
     {
-        m_speedAxisX->setTitleText(tr("Sample"));
+        m_speedAxisX->setTitleText(tr("Time (s)"));
     }
     if (m_speedAxisY != nullptr)
     {
@@ -635,7 +867,7 @@ void MainWindow::setupIqRefPage(QWidget *page)
     m_iqRefAxisY = qobject_cast<QValueAxis *>(chart->axes(Qt::Vertical).first());
     if (m_iqRefAxisX != nullptr)
     {
-        m_iqRefAxisX->setTitleText(tr("Sample"));
+        m_iqRefAxisX->setTitleText(tr("Time (s)"));
     }
     if (m_iqRefAxisY != nullptr)
     {
@@ -724,7 +956,7 @@ void MainWindow::setupSpeedMeasPage(QWidget *page)
     m_speedMeasAxisY = qobject_cast<QValueAxis *>(chart->axes(Qt::Vertical).first());
     if (m_speedMeasAxisX != nullptr)
     {
-        m_speedMeasAxisX->setTitleText(tr("Sample"));
+        m_speedMeasAxisX->setTitleText(tr("Time (s)"));
     }
     if (m_speedMeasAxisY != nullptr)
     {
@@ -791,6 +1023,190 @@ void MainWindow::setupSpeedMeasPage(QWidget *page)
     connect(m_speedMeasZoomInButton, &QToolButton::clicked, this, [this]() { zoomSpeedMeasWindow(-300); });
     connect(m_speedMeasZoomOutButton, &QToolButton::clicked, this, [this]() { zoomSpeedMeasWindow(300); });
     connect(m_speedMeasZoomResetButton, &QToolButton::clicked, this, [this]() { resetSpeedMeasWindow(); });
+}
+
+void MainWindow::setupCia402Page(QWidget *page)
+{
+    auto *root = new QHBoxLayout(page);
+    root->setSpacing(12);
+
+    auto *statusGroup = new QGroupBox(tr("CiA402 Status"), page);
+    auto *statusLayout = new QGridLayout(statusGroup);
+    m_cia402StatusWordLabel = new QLabel(tr("0x0000"), statusGroup);
+    m_cia402ModeLabel = new QLabel(tr("0"), statusGroup);
+    m_cia402AxisStateLabel = new QLabel(tr("0"), statusGroup);
+    m_cia402ErrorLabel = new QLabel(tr("0"), statusGroup);
+    m_cia402ControlModeLabel = new QLabel(tr("0"), statusGroup);
+    m_cia402ParamStateLabel = new QLabel(tr("0"), statusGroup);
+    m_cia402SpeedRefLabel = new QLabel(tr("0.000000"), statusGroup);
+    m_cia402TorqueRefLabel = new QLabel(tr("0.000000"), statusGroup);
+    m_paramValidLabel = new QLabel(tr("0x00"), statusGroup);
+    m_paramRsLabel = new QLabel(tr("0.000000"), statusGroup);
+    m_paramLdLabel = new QLabel(tr("0.000000"), statusGroup);
+    m_paramLqLabel = new QLabel(tr("0.000000"), statusGroup);
+    m_paramKeLabel = new QLabel(tr("0.000000"), statusGroup);
+
+    statusLayout->addWidget(new QLabel(tr("Statusword"), statusGroup), 0, 0);
+    statusLayout->addWidget(m_cia402StatusWordLabel, 0, 1);
+    statusLayout->addWidget(new QLabel(tr("Mode"), statusGroup), 1, 0);
+    statusLayout->addWidget(m_cia402ModeLabel, 1, 1);
+    statusLayout->addWidget(new QLabel(tr("Axis"), statusGroup), 2, 0);
+    statusLayout->addWidget(m_cia402AxisStateLabel, 2, 1);
+    statusLayout->addWidget(new QLabel(tr("Error"), statusGroup), 3, 0);
+    statusLayout->addWidget(m_cia402ErrorLabel, 3, 1);
+    statusLayout->addWidget(new QLabel(tr("CtrlMode"), statusGroup), 4, 0);
+    statusLayout->addWidget(m_cia402ControlModeLabel, 4, 1);
+    statusLayout->addWidget(new QLabel(tr("Param"), statusGroup), 5, 0);
+    statusLayout->addWidget(m_cia402ParamStateLabel, 5, 1);
+    statusLayout->addWidget(new QLabel(tr("Speed Ref"), statusGroup), 6, 0);
+    statusLayout->addWidget(m_cia402SpeedRefLabel, 6, 1);
+    statusLayout->addWidget(new QLabel(tr("Torque Ref"), statusGroup), 7, 0);
+    statusLayout->addWidget(m_cia402TorqueRefLabel, 7, 1);
+    statusLayout->addWidget(new QLabel(tr("Param Valid"), statusGroup), 8, 0);
+    statusLayout->addWidget(m_paramValidLabel, 8, 1);
+    statusLayout->addWidget(new QLabel(tr("Rs"), statusGroup), 9, 0);
+    statusLayout->addWidget(m_paramRsLabel, 9, 1);
+    statusLayout->addWidget(new QLabel(tr("Ld"), statusGroup), 10, 0);
+    statusLayout->addWidget(m_paramLdLabel, 10, 1);
+    statusLayout->addWidget(new QLabel(tr("Lq"), statusGroup), 11, 0);
+    statusLayout->addWidget(m_paramLqLabel, 11, 1);
+    statusLayout->addWidget(new QLabel(tr("Ke"), statusGroup), 12, 0);
+    statusLayout->addWidget(m_paramKeLabel, 12, 1);
+    statusLayout->setColumnMinimumWidth(0, 90);
+    statusLayout->setColumnStretch(1, 1);
+
+    auto *cmdGroup = new QGroupBox(tr("CiA402 Commands"), page);
+    auto *cmdGrid = new QGridLayout(cmdGroup);
+    m_cia402ControlWordSpin = new QSpinBox(cmdGroup);
+    m_cia402ControlWordSpin->setRange(0, 65535);
+    m_cia402ControlWordSpin->setDisplayIntegerBase(16);
+    m_cia402ControlWordSpin->setPrefix(QStringLiteral("0x"));
+    m_cia402ControlWordSpin->setValue(0x000F);
+
+    m_cia402ModeCombo = new QComboBox(cmdGroup);
+    m_cia402ModeCombo->addItem(tr("Profile Position"), kCia402ModeProfilePosition);
+    m_cia402ModeCombo->addItem(tr("Profile Velocity"), kCia402ModeProfileVelocity);
+    m_cia402ModeCombo->addItem(tr("Profile Torque"), kCia402ModeProfileTorque);
+    m_cia402ModeCombo->addItem(tr("Cyclic Sync Position"), kCia402ModeCyclicSyncPosition);
+    m_cia402ModeCombo->addItem(tr("Cyclic Sync Velocity"), kCia402ModeCyclicSyncVelocity);
+    m_cia402ModeCombo->addItem(tr("Cyclic Sync Torque"), kCia402ModeCyclicSyncTorque);
+
+    m_cia402SpeedRefSpin = new QDoubleSpinBox(cmdGroup);
+    m_cia402SpeedRefSpin->setRange(-10000.0, 10000.0);
+    m_cia402SpeedRefSpin->setDecimals(2);
+    m_cia402SpeedRefSpin->setSingleStep(10.0);
+    m_cia402SpeedRefSpin->setValue(100.0);
+
+    m_cia402TorqueRefSpin = new QDoubleSpinBox(cmdGroup);
+    m_cia402TorqueRefSpin->setRange(-50.0, 50.0);
+    m_cia402TorqueRefSpin->setDecimals(3);
+    m_cia402TorqueRefSpin->setSingleStep(0.1);
+    m_cia402TorqueRefSpin->setValue(0.5);
+
+    m_cia402SendCwButton = new QPushButton(tr("Send CW"), cmdGroup);
+    m_cia402SendModeButton = new QPushButton(tr("Send Mode"), cmdGroup);
+    m_cia402SendSpeedButton = new QPushButton(tr("Send Speed"), cmdGroup);
+    m_cia402SendTorqueButton = new QPushButton(tr("Send Torque"), cmdGroup);
+    m_cia402QueryButton = new QPushButton(tr("Query Status"), cmdGroup);
+    m_paramQueryButton = new QPushButton(tr("Query Params"), cmdGroup);
+    auto *faultButton = new QPushButton(tr("Fault Reset"), cmdGroup);
+    auto *shutdownButton = new QPushButton(tr("Shutdown"), cmdGroup);
+    auto *switchOnButton = new QPushButton(tr("Switch On"), cmdGroup);
+    auto *enableOpButton = new QPushButton(tr("Enable Op"), cmdGroup);
+
+    const auto normalizeCia402Widget = [](QWidget *widget, int minimumWidth) {
+        if (widget == nullptr)
+        {
+            return;
+        }
+        widget->setMinimumSize(minimumWidth, 24);
+        widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    };
+    normalizeCia402Widget(m_cia402ControlWordSpin, 180);
+    normalizeCia402Widget(m_cia402ModeCombo, 180);
+    normalizeCia402Widget(m_cia402SpeedRefSpin, 180);
+    normalizeCia402Widget(m_cia402TorqueRefSpin, 180);
+    const QList<QWidget *> cia402Buttons = {
+        m_cia402SendCwButton, m_cia402SendModeButton, m_cia402SendSpeedButton,
+        m_cia402SendTorqueButton, m_cia402QueryButton, m_paramQueryButton,
+        faultButton, shutdownButton, switchOnButton, enableOpButton
+    };
+    for (QWidget *button : cia402Buttons)
+    {
+        normalizeCia402Widget(button, 140);
+    }
+
+    cmdGrid->addWidget(new QLabel(tr("Controlword"), cmdGroup), 0, 0);
+    cmdGrid->addWidget(m_cia402ControlWordSpin, 0, 1);
+    cmdGrid->addWidget(m_cia402SendCwButton, 0, 2);
+    cmdGrid->addWidget(faultButton, 0, 3);
+    cmdGrid->addWidget(shutdownButton, 1, 0);
+    cmdGrid->addWidget(switchOnButton, 1, 1);
+    cmdGrid->addWidget(enableOpButton, 1, 2);
+    cmdGrid->addWidget(new QLabel(tr("Mode"), cmdGroup), 2, 0);
+    cmdGrid->addWidget(m_cia402ModeCombo, 2, 1);
+    cmdGrid->addWidget(m_cia402SendModeButton, 2, 2);
+    cmdGrid->addWidget(m_cia402QueryButton, 2, 3);
+    cmdGrid->addWidget(new QLabel(tr("Speed rpm"), cmdGroup), 3, 0);
+    cmdGrid->addWidget(m_cia402SpeedRefSpin, 3, 1);
+    cmdGrid->addWidget(m_cia402SendSpeedButton, 3, 2);
+    cmdGrid->addWidget(new QLabel(tr("Torque A"), cmdGroup), 4, 0);
+    cmdGrid->addWidget(m_cia402TorqueRefSpin, 4, 1);
+    cmdGrid->addWidget(m_cia402SendTorqueButton, 4, 2);
+    cmdGrid->addWidget(m_paramQueryButton, 4, 3);
+    cmdGrid->setColumnMinimumWidth(0, 105);
+    cmdGrid->setColumnMinimumWidth(1, 190);
+    cmdGrid->setColumnMinimumWidth(2, 150);
+    cmdGrid->setColumnMinimumWidth(3, 150);
+
+    m_cia402ControlWordSpin->setToolTip(tr("Manual CiA402 controlword entry for custom state transitions."));
+    m_cia402ModeCombo->setToolTip(tr("Select the CiA402 operation mode to send to the device."));
+    m_cia402SpeedRefSpin->setToolTip(tr("Target speed command in rpm."));
+    m_cia402TorqueRefSpin->setToolTip(tr("Target torque/current related command used by firmware mapping."));
+    m_cia402SendCwButton->setToolTip(tr("Send the current controlword value."));
+    m_cia402SendModeButton->setToolTip(tr("Send the selected CiA402 mode."));
+    m_cia402SendSpeedButton->setToolTip(tr("Send the current speed reference."));
+    m_cia402SendTorqueButton->setToolTip(tr("Send the current torque reference."));
+    m_cia402QueryButton->setToolTip(tr("Read back the latest CiA402 status summary from firmware."));
+    m_paramQueryButton->setToolTip(tr("Read back Rs/Ld/Lq/Ke and parameter-valid flags from firmware."));
+
+    statusGroup->setMinimumWidth(360);
+    statusGroup->setMaximumWidth(460);
+    statusGroup->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    cmdGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+    root->addWidget(statusGroup, 0);
+    root->addWidget(cmdGroup, 1);
+
+    connect(m_cia402SendCwButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("cia402 cw %1").arg(m_cia402ControlWordSpin->value()));
+    });
+    connect(faultButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("cia402 cw 128"));
+    });
+    connect(shutdownButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("cia402 cw 6"));
+    });
+    connect(switchOnButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("cia402 cw 7"));
+    });
+    connect(enableOpButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("cia402 cw 15"));
+    });
+    connect(m_cia402SendModeButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("cia402 mode %1").arg(m_cia402ModeCombo->currentData().toInt()));
+    });
+    connect(m_cia402SendSpeedButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("cia402 speed %1").arg(m_cia402SpeedRefSpin->value(), 0, 'f', 2));
+    });
+    connect(m_cia402SendTorqueButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("cia402 torque %1").arg(m_cia402TorqueRefSpin->value(), 0, 'f', 3));
+    });
+    connect(m_cia402QueryButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("cia402 status"));
+    });
+    connect(m_paramQueryButton, &QPushButton::clicked, this, [this]() {
+        sendPresetCommand(QStringLiteral("params"));
+    });
 }
 
 void MainWindow::refreshPorts()
@@ -914,11 +1330,31 @@ void MainWindow::clearLog()
 {
     m_logEdit->clear();
     m_sampleIndex = 0;
+    m_plotTimeBaseMs = 0;
+    m_lastChartRefreshTick = 0;
+    m_lastCia402Statusword = 0U;
+    m_lastCia402Mode = 0U;
+    m_lastAxisState = 0U;
+    m_lastAxisError = 0U;
+    m_lastControlMode = 0U;
+    m_lastParamState = 0U;
+    m_lastTelemetrySequence = 0U;
+    m_lastTelemetryDeviceTick = 0U;
     if (m_debugEdit != nullptr)
     {
         m_debugEdit->clear();
     }
     m_rxLineBuffer.clear();
+    m_angleMechPoints.clear();
+    m_angleAppPoints.clear();
+    if (m_angleMechSeries != nullptr)
+    {
+        m_angleMechSeries->clear();
+    }
+    if (m_angleAppSeries != nullptr)
+    {
+        m_angleAppSeries->clear();
+    }
     if (m_angleTimeSlider != nullptr)
     {
         m_angleTimeSlider->setRange(0, 0);
@@ -928,7 +1364,12 @@ void MainWindow::clearLog()
     {
         m_speedSeries->clear();
     }
+    if (m_speedRefSeries != nullptr)
+    {
+        m_speedRefSeries->clear();
+    }
     m_speedPoints.clear();
+    m_speedRefPoints.clear();
     m_speedSampleIndex = 0;
     if (m_speedTimeSlider != nullptr)
     {
@@ -985,6 +1426,25 @@ void MainWindow::clearLog()
     {
         m_speedMeasPeakLabel->setText(tr("SpeedMeas: [0.000000, 0.000000] rpm | SpeedErr: [0.000000, 0.000000] rpm"));
     }
+
+    setLabelTextIfChanged(m_cia402StatusWordLabel, formatDecodedUInt(0U, decodeCia402State(0U), true));
+    setLabelTextIfChanged(m_cia402ModeLabel, formatDecodedUInt(0U, decodeCia402Mode(0U)));
+    setLabelTextIfChanged(m_cia402AxisStateLabel, formatDecodedUInt(0U, decodeAxisState(0U)));
+    setLabelTextIfChanged(m_cia402ErrorLabel, formatDecodedUInt(0U, decodeErrorState(0U)));
+    setLabelTextIfChanged(m_cia402ControlModeLabel, formatDecodedUInt(0U, decodeControlMode(0U)));
+    setLabelTextIfChanged(m_cia402ParamStateLabel, formatDecodedUInt(0U, decodeParamState(0U)));
+    setLabelTextIfChanged(m_cia402SpeedRefLabel, tr("0.000000"));
+    setLabelTextIfChanged(m_cia402TorqueRefLabel, tr("0.000000"));
+    setLabelTextIfChanged(m_paramValidLabel, tr("0x00"));
+    setLabelTextIfChanged(m_paramRsLabel, tr("0.000000"));
+    setLabelTextIfChanged(m_paramLdLabel, tr("0.000000"));
+    setLabelTextIfChanged(m_paramLqLabel, tr("0.000000"));
+    setLabelTextIfChanged(m_paramKeLabel, tr("0.000000"));
+    if (m_statusLink != nullptr)
+    {
+        m_statusLink->setText(tr("Waiting telemetry..."));
+    }
+
     m_speedMeasAutoFollow = true;
     m_speedMeasSliderDragging = false;
     m_lastSpeedMeasUiTick = 0;
@@ -1047,6 +1507,20 @@ void MainWindow::processLine(const QString &line)
         appendDebug(line);
         return;
     }
+
+    if (line.startsWith(QStringLiteral("CIA402 ")))
+    {
+        handleTelemetryLine(line);
+        appendDebug(line);
+        return;
+    }
+
+    if (line.startsWith(QStringLiteral("PARAM ")))
+    {
+        handleParamLine(line);
+        appendDebug(line);
+        return;
+    }
 }
 
 namespace
@@ -1087,10 +1561,65 @@ bool parseKeyValueFloatFast(const QString &line, const char *key, double *value)
     *value = v;
     return true;
 }
+
+bool parseKeyValueUIntFast(const QString &line, const char *key, unsigned int *value)
+{
+    if (value == nullptr)
+    {
+        return false;
+    }
+
+    const QString keyStr = QString::fromLatin1(key);
+    const QString needle = keyStr + QLatin1Char('=');
+    const int keyPos = line.indexOf(needle, 0, Qt::CaseInsensitive);
+    if (keyPos < 0)
+    {
+        return false;
+    }
+
+    int endPos = keyPos + needle.size();
+    while (endPos < line.size())
+    {
+        const QChar ch = line.at(endPos);
+        if (!((ch.isDigit()) || (ch == 'x') || (ch == 'X') ||
+              ((ch >= 'a') && (ch <= 'f')) || ((ch >= 'A') && (ch <= 'F'))))
+        {
+            break;
+        }
+        ++endPos;
+    }
+
+    bool ok = false;
+    const unsigned int v = line.mid(keyPos + needle.size(), endPos - (keyPos + needle.size())).toUInt(&ok, 0);
+    if (!ok)
+    {
+        return false;
+    }
+
+    *value = v;
+    return true;
+}
 }
 
 void MainWindow::handleTelemetryLine(const QString &line)
 {
+    if (!m_angleSliderDragging)
+    {
+        m_angleAutoFollow = true;
+    }
+    if (!m_speedSliderDragging)
+    {
+        m_speedAutoFollow = true;
+    }
+    if (!m_iqRefSliderDragging)
+    {
+        m_iqRefAutoFollow = true;
+    }
+    if (!m_speedMeasSliderDragging)
+    {
+        m_speedMeasAutoFollow = true;
+    }
+
     double mechDeg = 0.0;
     double appDeg = 0.0;
     double iqRawAmp = 0.0;
@@ -1099,6 +1628,19 @@ void MainWindow::handleTelemetryLine(const QString &line)
     double speedRpm = 0.0;
     double speedMeasRpm = 0.0;
     double speedErrRpm = 0.0;
+    double speedRefRpm = 0.0;
+    double torqueRefA = 0.0;
+    double torqueActA = 0.0;
+    unsigned int cia402Sw = 0U;
+    unsigned int cia402Mo = 0U;
+    unsigned int cia402AxisState = 0U;
+    unsigned int cia402Error = 0U;
+    unsigned int cia402CtrlMode = 0U;
+    unsigned int cia402ParamState = 0U;
+    unsigned int telemetrySequence = 0U;
+    unsigned int telemetryDeviceTick = 0U;
+    const bool hasTelemetrySequence = parseKeyValueUIntFast(line, "SEQ", &telemetrySequence);
+    const bool hasTelemetryDeviceTick = parseKeyValueUIntFast(line, "TMS", &telemetryDeviceTick);
     const bool hasMech = parseKeyValueFloatFast(line, "MECH", &mechDeg);
     const bool hasApp = parseKeyValueFloatFast(line, "APP", &appDeg);
     const bool hasIqRaw = parseKeyValueFloatFast(line, "IQRAW", &iqRawAmp);
@@ -1106,10 +1648,22 @@ void MainWindow::handleTelemetryLine(const QString &line)
     const bool hasId = parseKeyValueFloatFast(line, "ID", &idAmp);
     const bool hasSpeedMeas = parseKeyValueFloatFast(line, "SPMR", &speedMeasRpm);
     const bool hasSpeedErr = parseKeyValueFloatFast(line, "SPER", &speedErrRpm);
+    const bool hasSpeedRef = parseKeyValueFloatFast(line, "SPREF", &speedRefRpm);
+    const bool hasTorqueRef = parseKeyValueFloatFast(line, "TREF", &torqueRefA);
+    const bool hasTorqueAct = parseKeyValueFloatFast(line, "TACT", &torqueActA);
+    const bool hasCia402Sw = parseKeyValueUIntFast(line, "SW", &cia402Sw);
+    const bool hasCia402Mo = parseKeyValueUIntFast(line, "MO", &cia402Mo);
+    const bool hasCia402AxisState = parseKeyValueUIntFast(line, "AST", &cia402AxisState);
+    const bool hasCia402Error = parseKeyValueUIntFast(line, "ERR", &cia402Error);
+    const bool hasCia402CtrlMode = parseKeyValueUIntFast(line, "CTRL", &cia402CtrlMode);
+    const bool hasCia402ParamState = parseKeyValueUIntFast(line, "PST", &cia402ParamState);
     const bool hasSpeed = parseKeyValueFloatFast(line, "SPEED", &speedRpm) ||
                           parseKeyValueFloatFast(line, "SPD", &speedRpm);
     const bool hasAnyTelemetry = hasMech || hasApp || hasIqRaw || hasIqRef || hasId || hasSpeed ||
-                                  hasSpeedMeas || hasSpeedErr;
+                                 hasSpeedMeas || hasSpeedErr || hasSpeedRef || hasTorqueRef ||
+                                  hasTorqueAct || hasCia402Sw || hasCia402Mo || hasCia402AxisState ||
+                                 hasCia402Error || hasCia402CtrlMode || hasCia402ParamState ||
+                                 hasTelemetrySequence || hasTelemetryDeviceTick;
 
     if (hasMech || hasApp)
     {
@@ -1119,6 +1673,10 @@ void MainWindow::handleTelemetryLine(const QString &line)
     if (hasSpeed)
     {
         m_lastSpeedRpm = speedRpm;
+    }
+    if (hasSpeedRef)
+    {
+        m_lastSpeedRefRpm = speedRefRpm;
     }
     if (hasIqRaw)
     {
@@ -1140,17 +1698,88 @@ void MainWindow::handleTelemetryLine(const QString &line)
     {
         m_lastSpeedErrorPu = speedErrRpm;
     }
+    if (hasCia402Sw)
+    {
+        m_lastCia402Statusword = cia402Sw;
+    }
+    if (hasTelemetrySequence)
+    {
+        m_lastTelemetrySequence = telemetrySequence;
+    }
+    if (hasTelemetryDeviceTick)
+    {
+        m_lastTelemetryDeviceTick = telemetryDeviceTick;
+    }
+    if (hasCia402Mo)
+    {
+        m_lastCia402Mode = cia402Mo;
+    }
+    if (hasCia402AxisState)
+    {
+        m_lastAxisState = cia402AxisState;
+        setLabelTextIfChanged(m_cia402AxisStateLabel, formatDecodedUInt(cia402AxisState, decodeAxisState(cia402AxisState)));
+    }
+    if (hasCia402Error)
+    {
+        m_lastAxisError = cia402Error;
+        setLabelTextIfChanged(m_cia402ErrorLabel, formatDecodedUInt(cia402Error, decodeErrorState(cia402Error)));
+    }
+    if (hasCia402CtrlMode)
+    {
+        m_lastControlMode = cia402CtrlMode;
+        setLabelTextIfChanged(m_cia402ControlModeLabel, formatDecodedUInt(cia402CtrlMode, decodeControlMode(cia402CtrlMode)));
+    }
+    if (hasCia402ParamState)
+    {
+        m_lastParamState = cia402ParamState;
+        setLabelTextIfChanged(m_cia402ParamStateLabel, formatDecodedUInt(cia402ParamState, decodeParamState(cia402ParamState)));
+    }
+    if (hasCia402Sw)
+    {
+        setLabelTextIfChanged(m_cia402StatusWordLabel,
+                              formatDecodedUInt(m_lastCia402Statusword,
+                                                decodeCia402State(m_lastCia402Statusword),
+                                                true));
+    }
+    if (hasCia402Mo)
+    {
+        setLabelTextIfChanged(m_cia402ModeLabel, formatDecodedUInt(m_lastCia402Mode, decodeCia402Mode(m_lastCia402Mode)));
+    }
+    if (hasSpeedRef)
+    {
+        setLabelTextIfChanged(m_cia402SpeedRefLabel, fmt6(speedRefRpm));
+    }
+    if (hasTorqueRef)
+    {
+        setLabelTextIfChanged(m_cia402TorqueRefLabel, fmt6(torqueRefA));
+    }
+    if ((m_statusLink != nullptr) && (hasCia402Sw || hasCia402Mo || hasCia402AxisState || hasCia402Error))
+    {
+        setLabelTextIfChanged(m_statusLink,
+                              tr("%1 | %2 | %3 | %4")
+                                  .arg(decodeCia402State(m_lastCia402Statusword),
+                                       decodeCia402Mode(m_lastCia402Mode),
+                                       decodeAxisState(m_lastAxisState),
+                                       decodeErrorState(m_lastAxisError)));
+    }
 
-    if (hasSpeed || hasIqRaw || hasIqRef || hasId)
+    if (hasSpeed || hasIqRaw || hasIqRef || hasId || hasSpeedRef || hasTorqueRef || hasTorqueAct)
     {
         updateSpeed(m_lastSpeedRpm);
+    }
+    if ((m_speedLink != nullptr) && hasSpeedRef)
+    {
+        setLabelTextIfChanged(m_speedLink,
+                              tr("Telemetry OK | Ref=%1 rpm | SEQ=%2")
+                                  .arg(fmt6(m_lastSpeedRefRpm),
+                                       QString::number(m_lastTelemetrySequence)));
     }
 
     if (hasIqRaw)
     {
         setLabelTextIfChanged(m_iqRawStatus, fmt6(iqRawAmp));
         setLabelTextIfChanged(m_iqRawLink, tr("Telemetry OK"));
-        const qint64 x = m_iqRawSampleIndex;
+        const double x = currentPlotTimeSeconds(&m_plotTimeBaseMs);
         m_iqRawPoints.append(QPointF(x, iqRawAmp));
         ++m_iqRawSampleIndex;
         trimPointBuffer(m_iqRawPoints, 7200);
@@ -1162,7 +1791,7 @@ void MainWindow::handleTelemetryLine(const QString &line)
         setLabelTextIfChanged(m_iqRefStatus, fmt6(iqRefAmp));
         setLabelTextIfChanged(m_iqRefDetailLabel, tr("Iq_ref: %1 A").arg(fmt6(iqRefAmp)));
         setLabelTextIfChanged(m_iqRefLink, tr("Telemetry OK"));
-        const qint64 x = m_iqRefSampleIndex;
+        const double x = currentPlotTimeSeconds(&m_plotTimeBaseMs);
         m_iqRefPoints.append(QPointF(x, iqRefAmp));
         ++m_iqRefSampleIndex;
         trimPointBuffer(m_iqRefPoints, 7200);
@@ -1173,7 +1802,7 @@ void MainWindow::handleTelemetryLine(const QString &line)
             if (m_iqRefAutoFollow)
             {
                 m_iqRefTimeSlider->blockSignals(true);
-                m_iqRefTimeSlider->setValue(qMax(0, m_iqRefPoints.size() - m_iqRefWindowSize));
+                m_iqRefTimeSlider->setValue(findLiveWindowStart(m_iqRawPoints, kLiveChartWindowSeconds));
                 m_iqRefTimeSlider->blockSignals(false);
             }
         }
@@ -1185,7 +1814,7 @@ void MainWindow::handleTelemetryLine(const QString &line)
         setLabelTextIfChanged(m_iqIdStatus, fmt6(idAmp));
         setLabelTextIfChanged(m_iqIdDetailLabel, tr("Id: %1 A").arg(fmt6(idAmp)));
         setLabelTextIfChanged(m_iqIdLink, tr("Telemetry OK"));
-        const qint64 x = m_iqIdSampleIndex;
+        const double x = currentPlotTimeSeconds(&m_plotTimeBaseMs);
         m_iqIdPoints.append(QPointF(x, idAmp));
         ++m_iqIdSampleIndex;
         trimPointBuffer(m_iqIdPoints, 7200);
@@ -1193,7 +1822,7 @@ void MainWindow::handleTelemetryLine(const QString &line)
 
     if (hasSpeedMeas || hasSpeedErr)
     {
-        const qint64 x = m_speedMeasSampleIndex;
+        const double x = currentPlotTimeSeconds(&m_plotTimeBaseMs);
         m_speedMeasPoints.append(QPointF(x, speedMeasRpm));
         m_speedErrPoints.append(QPointF(x, speedErrRpm));
         ++m_speedMeasSampleIndex;
@@ -1206,7 +1835,7 @@ void MainWindow::handleTelemetryLine(const QString &line)
             if (m_speedMeasAutoFollow)
             {
                 m_speedMeasTimeSlider->blockSignals(true);
-                m_speedMeasTimeSlider->setValue(qMax(0, m_speedMeasPoints.size() - m_speedMeasWindowSize));
+                m_speedMeasTimeSlider->setValue(findLiveWindowStart(m_speedMeasPoints, kLiveChartWindowSeconds));
                 m_speedMeasTimeSlider->blockSignals(false);
             }
         }
@@ -1221,10 +1850,7 @@ void MainWindow::handleTelemetryLine(const QString &line)
         }
         setLabelTextIfChanged(m_speedMeasLink, tr("Telemetry OK"));
         m_lastSpeedMeasUiTick = QDateTime::currentMSecsSinceEpoch();
-        if (m_tabs != nullptr && m_tabs->currentWidget() == m_speedMeasPage)
-        {
-            refreshSpeedMeasChart();
-        }
+        refreshSpeedMeasChart();
     }
 
     if (hasAnyTelemetry)
@@ -1232,16 +1858,69 @@ void MainWindow::handleTelemetryLine(const QString &line)
         m_lastTelemetryTick = QDateTime::currentMSecsSinceEpoch();
         if (m_statusLink != nullptr)
         {
-            setLabelTextIfChanged(m_statusLink, tr("Telemetry OK"));
+            if (hasCia402Sw || hasCia402Mo)
+            {
+                setLabelTextIfChanged(m_statusLink,
+                                      tr("%1 | %2 | SEQ=%3")
+                                          .arg(decodeCia402State(m_lastCia402Statusword),
+                                               decodeCia402Mode(m_lastCia402Mode),
+                                               QString::number(m_lastTelemetrySequence)));
+            }
+            else
+            {
+                setLabelTextIfChanged(m_statusLink,
+                                      tr("Telemetry OK | SEQ=%1")
+                                          .arg(QString::number(m_lastTelemetrySequence)));
+            }
         }
     }
 
     if (hasIqRaw || hasIqRef || hasId)
     {
-        if (m_tabs != nullptr && m_tabs->currentWidget() == m_iqRefPage)
-        {
-            refreshIqRefChart();
-        }
+        refreshIqRefChart();
+    }
+}
+
+void MainWindow::handleParamLine(const QString &line)
+{
+    double rs = 0.0;
+    double ld = 0.0;
+    double lq = 0.0;
+    double ke = 0.0;
+    unsigned int valid = 0U;
+    unsigned int pst = 0U;
+
+    const bool hasValid = parseKeyValueUIntFast(line, "VALID", &valid);
+    const bool hasRs = parseKeyValueFloatFast(line, "RS", &rs);
+    const bool hasLd = parseKeyValueFloatFast(line, "LD", &ld);
+    const bool hasLq = parseKeyValueFloatFast(line, "LQ", &lq);
+    const bool hasKe = parseKeyValueFloatFast(line, "KE", &ke);
+    const bool hasPst = parseKeyValueUIntFast(line, "PST", &pst);
+
+    if (hasValid && m_paramValidLabel != nullptr)
+    {
+        setLabelTextIfChanged(m_paramValidLabel,
+                              QStringLiteral("0x%1").arg(valid, 2, 16, QLatin1Char('0')).toUpper());
+    }
+    if (hasRs && m_paramRsLabel != nullptr)
+    {
+        setLabelTextIfChanged(m_paramRsLabel, fmt6(rs));
+    }
+    if (hasLd && m_paramLdLabel != nullptr)
+    {
+        setLabelTextIfChanged(m_paramLdLabel, fmt6(ld));
+    }
+    if (hasLq && m_paramLqLabel != nullptr)
+    {
+        setLabelTextIfChanged(m_paramLqLabel, fmt6(lq));
+    }
+    if (hasKe && m_paramKeLabel != nullptr)
+    {
+        setLabelTextIfChanged(m_paramKeLabel, fmt6(ke));
+    }
+    if (hasPst && m_cia402ParamStateLabel != nullptr)
+    {
+        setLabelTextIfChanged(m_cia402ParamStateLabel, formatDecodedUInt(pst, decodeParamState(pst)));
     }
 }
 
@@ -1252,7 +1931,7 @@ void MainWindow::updateAngle(double mechDeg, double appDeg)
         return;
     }
 
-    const qint64 x = m_angleMechPoints.size();
+    const double x = currentPlotTimeSeconds(&m_plotTimeBaseMs);
     m_angleMechPoints.append(QPointF(x, mechDeg));
     m_angleAppPoints.append(QPointF(x, appDeg));
     ++m_sampleIndex;
@@ -1267,7 +1946,7 @@ void MainWindow::updateAngle(double mechDeg, double appDeg)
         if (m_angleAutoFollow)
         {
             m_angleTimeSlider->blockSignals(true);
-            m_angleTimeSlider->setValue(qMax(0, m_angleMechPoints.size() - m_angleWindowSize));
+            m_angleTimeSlider->setValue(findLiveWindowStart(m_angleMechPoints, kLiveChartWindowSeconds));
             m_angleTimeSlider->blockSignals(false);
         }
     }
@@ -1298,11 +1977,13 @@ void MainWindow::updateSpeed(double speedRpm)
         return;
     }
 
-    const qint64 x = m_speedPoints.size();
+    const double x = currentPlotTimeSeconds(&m_plotTimeBaseMs);
     m_speedPoints.append(QPointF(x, speedRpm));
+    m_speedRefPoints.append(QPointF(x, m_lastSpeedRefRpm));
     ++m_speedSampleIndex;
 
     trimPointBuffer(m_speedPoints, 7200);
+    trimPointBuffer(m_speedRefPoints, 7200);
 
     if (m_speedTimeSlider != nullptr)
     {
@@ -1311,7 +1992,7 @@ void MainWindow::updateSpeed(double speedRpm)
         if (m_speedAutoFollow)
         {
             m_speedTimeSlider->blockSignals(true);
-            m_speedTimeSlider->setValue(qMax(0, m_speedPoints.size() - m_speedWindowSize));
+            m_speedTimeSlider->setValue(findLiveWindowStart(m_speedPoints, kLiveChartWindowSeconds));
             m_speedTimeSlider->blockSignals(false);
         }
     }
@@ -1319,10 +2000,7 @@ void MainWindow::updateSpeed(double speedRpm)
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if ((now - m_lastSpeedUiTick) >= 50 || m_speedSliderDragging)
     {
-        if (m_tabs != nullptr && m_tabs->currentWidget() == m_speedPage)
-        {
-            refreshSpeedChart();
-        }
+        refreshSpeedChart();
         m_lastSpeedUiTick = now;
     }
 
@@ -1348,18 +2026,26 @@ void MainWindow::refreshAngleChart()
         return;
     }
 
-    const int startIndex = qBound(0, m_angleTimeSlider != nullptr ? m_angleTimeSlider->value() : 0, qMax(0, count - 1));
-    const int endIndex = qMin(count, startIndex + m_angleWindowSize);
+    const int sliderStart = qBound(0, m_angleTimeSlider != nullptr ? m_angleTimeSlider->value() : 0, qMax(0, count - 1));
+    const int startIndex = m_angleAutoFollow ? findLiveWindowStart(m_angleMechPoints, kLiveChartWindowSeconds) : sliderStart;
+    const int endIndex = m_angleAutoFollow ? count : qMin(count, startIndex + m_angleWindowSize);
     const int size = qMax(0, endIndex - startIndex);
 
-    m_angleMechSeries->replace(m_angleMechPoints.mid(startIndex, size));
-    m_angleAppSeries->replace(m_angleAppPoints.mid(startIndex, size));
+    const QVector<QPointF> mechVisible = m_angleMechPoints.mid(startIndex, size);
+    const QVector<QPointF> appVisible = m_angleAppPoints.mid(startIndex, size);
+    m_angleMechSeries->replace(mechVisible);
+    m_angleAppSeries->replace(appVisible);
 
-    m_angleAxisX->setRange(startIndex, qMax(startIndex + 1, endIndex - 1));
-    m_angleAxisX->setLabelFormat("%.0f");
+    if (!mechVisible.isEmpty())
+    {
+        const double xMin = mechVisible.first().x();
+        const double xMax = mechVisible.last().x();
+        m_angleAxisX->setRange(xMin, qMax(xMin + 0.001, xMax));
+    }
+    m_angleAxisX->setLabelFormat("%.1f");
 
-    m_angleAxisY->setRange(-370.0, 370.0);
-    m_angleAxisY->setTickCount(11);
+    m_angleAxisY->setRange(0.0, 360.0);
+    m_angleAxisY->setTickCount(7);
     m_angleAxisY->setLabelFormat("%.1f");
     m_angleAxisY->setReverse(false);
 
@@ -1379,14 +2065,27 @@ void MainWindow::refreshSpeedChart()
         return;
     }
 
-    const int startIndex = qBound(0, m_speedTimeSlider != nullptr ? m_speedTimeSlider->value() : 0, qMax(0, count - 1));
-    const int endIndex = qMin(count, startIndex + m_speedWindowSize);
+    const int sliderStart = qBound(0, m_speedTimeSlider != nullptr ? m_speedTimeSlider->value() : 0, qMax(0, count - 1));
+    const int startIndex = m_speedAutoFollow ? findLiveWindowStart(m_speedPoints, kLiveChartWindowSeconds) : sliderStart;
+    const int endIndex = m_speedAutoFollow ? count : qMin(count, startIndex + m_speedWindowSize);
     const int size = qMax(0, endIndex - startIndex);
 
-    m_speedSeries->replace(m_speedPoints.mid(startIndex, size));
+    const QVector<QPointF> visible = m_speedPoints.mid(startIndex, size);
+    const QVector<QPointF> refVisible = m_speedRefPoints.mid(startIndex, size);
+    m_speedSeries->replace(visible);
+    if (m_speedRefSeries != nullptr)
+    {
+        m_speedRefSeries->replace(refVisible);
+    }
 
-    m_speedAxisX->setRange(startIndex, qMax(startIndex + 1, endIndex - 1));
-    m_speedAxisX->setLabelFormat("%.0f");
+    if (!visible.isEmpty() || !refVisible.isEmpty())
+    {
+        const QVector<QPointF> &xPoints = !visible.isEmpty() ? visible : refVisible;
+        const double xMin = xPoints.first().x();
+        const double xMax = xPoints.last().x();
+        m_speedAxisX->setRange(xMin, qMax(xMin + 0.001, xMax));
+    }
+    m_speedAxisX->setLabelFormat("%.1f");
 
     double minSpeed = m_speedPoints[startIndex].y();
     double maxSpeed = minSpeed;
@@ -1394,6 +2093,11 @@ void MainWindow::refreshSpeedChart()
     {
         minSpeed = qMin(minSpeed, m_speedPoints[i].y());
         maxSpeed = qMax(maxSpeed, m_speedPoints[i].y());
+        if (i < m_speedRefPoints.size())
+        {
+            minSpeed = qMin(minSpeed, m_speedRefPoints[i].y());
+            maxSpeed = qMax(maxSpeed, m_speedRefPoints[i].y());
+        }
     }
 
     const double span = qMax(50.0, maxSpeed - minSpeed);
@@ -1420,14 +2124,22 @@ void MainWindow::refreshSpeedMeasChart()
         return;
     }
 
-    const int startIndex = qBound(0, m_speedMeasTimeSlider != nullptr ? m_speedMeasTimeSlider->value() : 0, qMax(0, count - 1));
-    const int endIndex = qMin(count, startIndex + m_speedMeasWindowSize);
+    const int sliderStart = qBound(0, m_speedMeasTimeSlider != nullptr ? m_speedMeasTimeSlider->value() : 0, qMax(0, count - 1));
+    const int startIndex = m_speedMeasAutoFollow ? findLiveWindowStart(m_speedMeasPoints, kLiveChartWindowSeconds) : sliderStart;
+    const int endIndex = m_speedMeasAutoFollow ? count : qMin(count, startIndex + m_speedMeasWindowSize);
     const int size = qMax(0, endIndex - startIndex);
 
-    m_speedMeasSeries->replace(m_speedMeasPoints.mid(startIndex, size));
-    m_speedErrSeries->replace(m_speedErrPoints.mid(startIndex, size));
-    m_speedMeasAxisX->setRange(startIndex, qMax(startIndex + 1, endIndex - 1));
-    m_speedMeasAxisX->setLabelFormat("%.0f");
+    const QVector<QPointF> measVisible = m_speedMeasPoints.mid(startIndex, size);
+    const QVector<QPointF> errVisible = m_speedErrPoints.mid(startIndex, size);
+    m_speedMeasSeries->replace(measVisible);
+    m_speedErrSeries->replace(errVisible);
+    if (!measVisible.isEmpty())
+    {
+        const double xMin = measVisible.first().x();
+        const double xMax = measVisible.last().x();
+        m_speedMeasAxisX->setRange(xMin, qMax(xMin + 0.001, xMax));
+    }
+    m_speedMeasAxisX->setLabelFormat("%.1f");
 
     if (size > 0 && m_speedMeasPeakLabel != nullptr)
     {
@@ -1489,42 +2201,46 @@ void MainWindow::refreshIqRefChart()
     const int rawCount = m_iqRawPoints.size();
     const int idCount = m_iqIdPoints.size();
     const int count = qMax(qMax(refCount, rawCount), idCount);
-    const int startIndex = qBound(0, m_iqRefTimeSlider != nullptr ? m_iqRefTimeSlider->value() : 0, qMax(0, count - 1));
-    const int endIndex = qMin(count, startIndex + m_iqRefWindowSize);
+    const int sliderStart = qBound(0, m_iqRefTimeSlider != nullptr ? m_iqRefTimeSlider->value() : 0, qMax(0, count - 1));
+    const int startIndex = m_iqRefAutoFollow ? findLiveWindowStart(m_iqRawPoints, kLiveChartWindowSeconds) : sliderStart;
+    const int endIndex = m_iqRefAutoFollow ? count : qMin(count, startIndex + m_iqRefWindowSize);
     const int size = qMax(0, endIndex - startIndex);
 
-    QVector<QPointF> rawVisible;
-    QVector<QPointF> refVisible;
-    QVector<QPointF> idVisible;
-    rawVisible.reserve(size);
-    refVisible.reserve(size);
-    for (const QPointF &p : m_iqRawPoints)
-    {
-        if (p.x() >= startIndex && p.x() < endIndex)
-        {
-            rawVisible.append(p);
-        }
-    }
-    for (const QPointF &p : m_iqIdPoints)
-    {
-        if (p.x() >= startIndex && p.x() < endIndex)
-        {
-            idVisible.append(p);
-        }
-    }
-    for (const QPointF &p : m_iqRefPoints)
-    {
-        if (p.x() >= startIndex && p.x() < endIndex)
-        {
-            refVisible.append(p);
-        }
-    }
+    const QVector<QPointF> rawVisible = (startIndex < rawCount) ? m_iqRawPoints.mid(startIndex, qMin(size, rawCount - startIndex)) : QVector<QPointF>();
+    const QVector<QPointF> idVisible = (startIndex < idCount) ? m_iqIdPoints.mid(startIndex, qMin(size, idCount - startIndex)) : QVector<QPointF>();
+    const QVector<QPointF> refVisible = (startIndex < refCount) ? m_iqRefPoints.mid(startIndex, qMin(size, refCount - startIndex)) : QVector<QPointF>();
 
     m_iqRawSeries->replace(rawVisible);
     m_iqRefSeries->replace(refVisible);
     m_iqIdSeries->replace(idVisible);
-    m_iqRefAxisX->setRange(startIndex, qMax(startIndex + 1, endIndex - 1));
-    m_iqRefAxisX->setLabelFormat("%.0f");
+    double xMin = 0.0;
+    double xMax = 1.0;
+    bool hasXRange = false;
+    const auto updateXRange = [&hasXRange, &xMin, &xMax](const QVector<QPointF> &points) {
+        if (points.isEmpty())
+        {
+            return;
+        }
+
+        if (!hasXRange)
+        {
+            xMin = points.first().x();
+            xMax = points.last().x();
+            hasXRange = true;
+            return;
+        }
+
+        xMin = qMin(xMin, points.first().x());
+        xMax = qMax(xMax, points.last().x());
+    };
+    updateXRange(rawVisible);
+    updateXRange(refVisible);
+    updateXRange(idVisible);
+    if (hasXRange)
+    {
+        m_iqRefAxisX->setRange(xMin, qMax(xMin + 0.001, xMax));
+    }
+    m_iqRefAxisX->setLabelFormat("%.1f");
     m_iqRefAxisY->setRange(-2.5, 2.5);
     m_iqRefAxisY->setTickCount(11);
     m_iqRefAxisY->setLabelFormat("%.3f");
@@ -1682,18 +2398,18 @@ void MainWindow::resetAngleWindow()
     m_angleAutoFollow = true;
     if (m_angleTimeSlider != nullptr)
     {
-        m_angleTimeSlider->setValue(qMax(0, m_angleMechPoints.size() - m_angleWindowSize));
+        m_angleTimeSlider->setValue(findLiveWindowStart(m_angleMechPoints, kLiveChartWindowSeconds));
     }
     refreshAngleChart();
 }
 
 void MainWindow::resetSpeedWindow()
 {
-    m_speedWindowSize = 1800;
+    m_speedWindowSize = 600;
     m_speedAutoFollow = true;
     if (m_speedTimeSlider != nullptr)
     {
-        m_speedTimeSlider->setValue(qMax(0, m_speedPoints.size() - m_speedWindowSize));
+        m_speedTimeSlider->setValue(findLiveWindowStart(m_speedPoints, kLiveChartWindowSeconds));
     }
     refreshSpeedChart();
 }
@@ -1704,7 +2420,7 @@ void MainWindow::resetIqRefWindow()
     m_iqRefAutoFollow = true;
     if (m_iqRefTimeSlider != nullptr)
     {
-        m_iqRefTimeSlider->setValue(qMax(0, m_iqRefPoints.size() - m_iqRefWindowSize));
+        m_iqRefTimeSlider->setValue(findLiveWindowStart(m_iqRawPoints, kLiveChartWindowSeconds));
     }
     if (m_iqRefPeakLabel != nullptr)
     {
@@ -1723,7 +2439,7 @@ void MainWindow::resetSpeedMeasWindow()
     m_speedMeasAutoFollow = true;
     if (m_speedMeasTimeSlider != nullptr)
     {
-        m_speedMeasTimeSlider->setValue(qMax(0, m_speedMeasPoints.size() - m_speedMeasWindowSize));
+        m_speedMeasTimeSlider->setValue(findLiveWindowStart(m_speedMeasPoints, kLiveChartWindowSeconds));
     }
     if (m_speedMeasPeakLabel != nullptr)
     {

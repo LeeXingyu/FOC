@@ -23,7 +23,7 @@ uint16_t FOC_Control(void);
 /**
   * @brief  电流控制（电流环）
   */
-void Curr_Control(CurrCtrl_t *pCurrCtrl, CurrCtrlInput_t* pCurrCtrlInput);
+uint16_t Curr_Control(CurrCtrl_t *pCurrCtrl, CurrCtrlInput_t* pCurrCtrlInput);
 
 /**
   * @brief  速度控制（速度环）
@@ -41,7 +41,7 @@ fixp30_t Bus_Voltage_Compensation(CurrCtrl_t *pCurrCtrl, const fixp30_t udc_pu);
 /**
  * @brief  开环旋转测试, V/F 控制（电压随频率同步变化）
  */
-void Open_Loop_Control();
+void Open_Loop_Control(void);
 
 float MotorControl_GetIqRawDisplayA(void);
 float MotorControl_GetIqFilteredDisplayA(void);

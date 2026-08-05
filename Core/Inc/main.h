@@ -32,6 +32,7 @@ extern "C" {
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "mc_type.h"
+#include "cia402appl.h"
 #include "canopen.h"
 #include "spi_switch.h"
 /* USER CODE END Includes */
@@ -39,6 +40,8 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 /* USER CODE BEGIN ET */
 extern Axis_t g_axis;
+extern TCiA402Axis *g_pCiA402Axis;
+extern TIM_HandleTypeDef htim4;
 
 typedef struct {
     uint8_t raw_COMM_ID;    //  adc2 Rank 1 (Channel 17)
@@ -67,6 +70,7 @@ typedef enum {
 
 
 extern Comm_Protocol_t g_system_comm_mode;
+extern volatile uint8_t g_comm_protocol_locked;
 extern volatile uint8_t g_comm_io1_irq_pending;
 extern volatile uint8_t g_comm_io2_irq_pending;
 extern volatile uint8_t g_comm_int_irq_pending;
@@ -199,6 +203,7 @@ void Error_Handler(void);
 #ifndef APP_COMM_USE_CDC_ONLY
 #define APP_COMM_USE_CDC_ONLY        1U
 #endif
+void Comm_Protocol_Startup(void);
 void ADC_Rule_Collect(ADC_HandleTypeDef* hadc, ADC_Rule_Data_t* data);
 /* USER CODE END Private defines */
 

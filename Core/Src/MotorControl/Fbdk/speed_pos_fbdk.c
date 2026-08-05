@@ -466,7 +466,12 @@ void Get_Angle(fixp30_t *pAngle)
 
     fElecAngleUnwrapped = (float)tempRaw / (float)sumCount;
     fMechAngle = fElecAngleUnwrapped * (float)MC_Get_Pole_Pairs();
-    *pAngle = FIXP30(fmodf(fMechAngle, 1.0f));
+    fMechAngle = fmodf(fMechAngle, 1.0f);
+    if (fMechAngle < 0.0f)
+    {
+        fMechAngle += 1.0f;
+    }
+    *pAngle = FIXP30(fMechAngle);
 }
 
 /**

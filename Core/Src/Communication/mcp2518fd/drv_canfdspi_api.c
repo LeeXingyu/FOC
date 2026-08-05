@@ -60,12 +60,13 @@ MICROCHIP PROVIDES THIS SOFTWARE CONDITIONALLY UPON YOUR ACCEPTANCE OF THESE TER
 // *****************************************************************************
 // *****************************************************************************
 // Section: Variables
-#define SPI_DEFAULT_BUFFER_LENGTH 100
+#define SPI_TRANSFER_BUFFER_LENGTH 128U
+#define SPI_RAM_INIT_CHUNK_SIZE    (SPI_TRANSFER_BUFFER_LENGTH - 2U)
 //! SPI Transmit buffer
-uint8_t spiTransmitBuffer[SPI_DEFAULT_BUFFER_LENGTH];
+uint8_t spiTransmitBuffer[SPI_TRANSFER_BUFFER_LENGTH];
 
 //! SPI Receive buffer
-uint8_t spiReceiveBuffer[SPI_DEFAULT_BUFFER_LENGTH];
+uint8_t spiReceiveBuffer[SPI_TRANSFER_BUFFER_LENGTH];
 
 //! Reverse order of bits in byte
 const uint8_t BitReverseTable256[256] = {
@@ -2708,23 +2709,29 @@ int8_t DRV_CANFDSPI_CrcValueGet(CANFDSPI_MODULE_ID index, uint16_t* crc)
 
 int8_t DRV_CANFDSPI_RamInit(CANFDSPI_MODULE_ID index, uint8_t d)
 {
-    uint8_t txd[SPI_DEFAULT_BUFFER_LENGTH];
+    uint8_t txd[SPI_RAM_INIT_CHUNK_SIZE];
     uint32_t k;
+    uint32_t remainingBytes = cRAM_SIZE;
     int8_t spiTransferError = 0;
 
     // Prepare data
-    for (k = 0; k < SPI_DEFAULT_BUFFER_LENGTH; k++) {
+    for (k = 0; k < SPI_RAM_INIT_CHUNK_SIZE; k++) {
         txd[k] = d;
     }
 
     uint16_t a = cRAMADDR_START;
 
-    for (k = 0; k < (cRAM_SIZE / SPI_DEFAULT_BUFFER_LENGTH); k++) {
-        spiTransferError = DRV_CANFDSPI_WriteByteArray(index, a, txd, SPI_DEFAULT_BUFFER_LENGTH);
+    while (remainingBytes > 0U) {
+        uint16_t chunkSize = (remainingBytes > SPI_RAM_INIT_CHUNK_SIZE) ?
+                (uint16_t)SPI_RAM_INIT_CHUNK_SIZE :
+                (uint16_t)remainingBytes;
+
+        spiTransferError = DRV_CANFDSPI_WriteByteArray(index, a, txd, chunkSize);
         if (spiTransferError) {
             return -1;
         }
-        a += SPI_DEFAULT_BUFFER_LENGTH;
+        a += chunkSize;
+        remainingBytes -= chunkSize;
     }
 
     return spiTransferError;

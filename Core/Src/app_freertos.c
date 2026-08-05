@@ -144,23 +144,24 @@ void MX_FREERTOS_Init(void) {
     RTOS_MarkTaskCreateFailure(1UL << 0);
   }
   /* creation of Comm_Task / CDC_Task */
-#if defined(APP_COMM_USE_CDC_ONLY) && (APP_COMM_USE_CDC_ONLY != 0)
   CDC_TaskHandle = osThreadNew(CDC_Communication_Task, NULL, &CDC_Task_attributes);
   if (CDC_TaskHandle == NULL)
   {
     RTOS_MarkTaskCreateFailure(1UL << 1);
   }
-#else
-  Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
-  if (Comm_TaskHandle == NULL)
+  if ((g_system_comm_mode == COMM_PROTO_CAN) ||
+      (g_system_comm_mode == COMM_PROTO_ETHERCAT))
   {
-    RTOS_MarkTaskCreateFailure(1UL << 1);
+    Comm_TaskHandle = osThreadNew(Communication_Task, NULL, &Comm_Task_attributes);
+    if (Comm_TaskHandle == NULL)
+    {
+      RTOS_MarkTaskCreateFailure(1UL << 2);
+    }
   }
-#endif
   temTaskHandle = osThreadNew(Tem_Task, NULL, &temTask_attributes);
   if (temTaskHandle == NULL)
   {
-    RTOS_MarkTaskCreateFailure(1UL << 2);
+    RTOS_MarkTaskCreateFailure(1UL << 3);
   }
   /* add threads, ... */
   /* USER CODE END RTOS_THREADS */
@@ -202,6 +203,11 @@ void Communication_Task(void *argument)
   /* USER CODE BEGIN Communication_Task */
   /* Infinite loop */
   static uint8_t comm_period_div = 0U;
+
+  if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
+  {
+    LAN9253_SetTaskHandle((void *)xTaskGetCurrentTaskHandle());
+  }
 
   for(;;)
   {
@@ -248,6 +254,10 @@ void Communication_Task(void *argument)
     else if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
     {
       LAN9253_Process();
+    }
+    else
+    {
+      osDelay(1);
     }
   }
   /* USER CODE END Communication_Task */

@@ -21,24 +21,32 @@
 #define POSITION_CONTROL_COUNT              16
 
 /*
- * Speed-loop segmented PI.
- * 1: enable low-speed/high-speed gain switching
- * 0: use the default gains everywhere
+ * Position-loop tuning defaults.
+ * Keep these aligned with the SG position module so the runtime behavior
+ * stays consistent after the port.
  */
-#ifndef SPEED_PI_SEGMENTED_ENABLE
-#define SPEED_PI_SEGMENTED_ENABLE           1U
-#endif
+#define POSITION_GAIN_FAR_MIN               200.0f
+#define POSITION_GAIN_FAR_MAX               400.0f
+#define POSITION_GAIN_NEAR_MIN              400.0f
+#define POSITION_GAIN_NEAR_MAX              600.0f
+#define POSITION_GAIN_BLEND_INNER_COUNT     80.0f
+#define POSITION_GAIN_BLEND_OUTER_COUNT     400.0f
+#define POSITION_TRAJ_DONE_COUNT            0.5f
+#define POSITION_OSC_CROSS_COUNT            15.0f
+#define POSITION_OSC_CALM_COUNT             10.0f
+#define POSITION_CAPTURE_ERROR_COUNT        200.0f
+#define POSITION_CAPTURE_HOLD_COUNT         2.0f
+#define POSITION_CAPTURE_FF_MAX_RPM         0.5f
+#define POSITION_CAPTURE_KI_NUMERATOR       6U
+#define POSITION_CAPTURE_KI_DENOMINATOR     100U
+#define POSITION_CAPTURE_I_LIMIT_RPM        1.0f
+#define POSITION_CAPTURE_I_DECAY_TIME_S     0.05f
+#define POSITION_CAPTURE_ZERO_CROSS_DECAY   0.3f
+#define POSITION_CORRECTION_SLEW_RPM_PER_S  300.0f
 
-/* Low-speed PI band: use stronger gains below this mechanical speed. */
-#define SPEED_PI_LOW_BAND_RPM               40.0f
-
-/* Default gains for 40~100 rpm and above. */
-#define SPEED_PI_DEFAULT_KP                 2.62f
-#define SPEED_PI_DEFAULT_KI                 1.30f
-
-/* Low-speed gains below 40 rpm. */
-#define SPEED_PI_LOW_KP                     7.40f
-#define SPEED_PI_LOW_KI                     9.00f
+/* Default speed-loop PI gains. */
+#define SPEED_PI_DEFAULT_KP                 0.18f
+#define SPEED_PI_DEFAULT_KI                 0.25f
 
 /*
  * CiA 402 compatibility layer over the existing custom CAN transport.
@@ -46,7 +54,7 @@
  * the legacy command set.
  */
 #ifndef APP_USE_CIA402_CAN
-#define APP_USE_CIA402_CAN                  0U
+#define APP_USE_CIA402_CAN                  1U
 #endif
 
 #define CIA402_MODE_NONE                    0

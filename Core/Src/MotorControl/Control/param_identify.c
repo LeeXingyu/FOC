@@ -9,6 +9,8 @@
 #include "curr_fbdk.h"
 #include "foc.h"
 #include "speed_pos_fbdk.h"
+#include "curr_autotune.h"
+#include "speed_autotune.h"
 #include "stm32g4xx_hal_flash.h"
 #include "pidregdqx_current.h"
 
@@ -54,6 +56,89 @@ static void ParamId_ResetResult(ParamIdResult_t *r)
 static void ParamId_ResetDebugData(void)
 {
     memset(&s_param_id_debug_data, 0, sizeof(s_param_id_debug_data));
+}
+
+static bool ParamId_CurrentAutoTuneIsFinal(void)
+{
+    return (g_rs_ident.state == CURR_AUTOTUNE_FINISH ||
+            g_rs_ident.state == CURR_AUTOTUNE_RECOVER ||
+            g_rs_ident.state == CURR_AUTOTUNE_FAULT);
+}
+
+static bool ParamId_SpeedAutoTuneIsFinal(void)
+{
+    return (g_speedAutoTuneResult.state == SPEED_AUTOTUNE_FINISH ||
+            g_speedAutoTuneResult.state == SPEED_AUTOTUNE_RECOVER ||
+            g_speedAutoTuneResult.state == SPEED_AUTOTUNE_FAULT);
+}
+
+static bool ParamId_CurrentAutoTuneHasValidResult(void)
+{
+    return (g_rs_ident.state == CURR_AUTOTUNE_FINISH ||
+            g_rs_ident.state == CURR_AUTOTUNE_RECOVER);
+}
+
+static bool ParamId_SpeedAutoTuneHasValidResult(void)
+{
+    return (g_speedAutoTuneResult.state == SPEED_AUTOTUNE_FINISH ||
+            g_speedAutoTuneResult.state == SPEED_AUTOTUNE_RECOVER);
+}
+
+static void ParamId_SyncResultFromSG(ParamIdResult_t *result)
+{
+    if (result == NULL)
+    {
+        return;
+    }
+
+    memset(result, 0, sizeof(*result));
+
+    if (g_rs_ident.Rs > 0.0f)
+    {
+        result->validRs = ParamId_CurrentAutoTuneHasValidResult() || g_bStartCurrentAutoTune;
+        result->rs_ohm = g_rs_ident.Rs;
+    }
+
+    if (g_rs_ident.Ld > 0.0f)
+    {
+        result->validLd = ParamId_CurrentAutoTuneHasValidResult() || g_bStartCurrentAutoTune;
+        result->ld_h = g_rs_ident.Ld;
+    }
+
+    if (g_rs_ident.Lq > 0.0f)
+    {
+        result->validLq = ParamId_CurrentAutoTuneHasValidResult() || g_bStartCurrentAutoTune;
+        result->lq_h = g_rs_ident.Lq;
+    }
+
+    /*
+     * SG 当前没有单独的 Ke/J/B 持久化链路。
+     * 这里保留字段，但不把它们当作当前自动整定结果的一部分。
+     */
+    result->validKe = false;
+    result->ke_v_per_rad_s = 0.0f;
+}
+
+static void ParamId_SyncDebugFromSG(void)
+{
+    s_param_id_debug_data.calc_id_a = FIXP30_toF(g_axis.currCtrl.calcIdq.D) * CURRENT_SCALE;
+    s_param_id_debug_data.calc_iq_a = FIXP30_toF(g_axis.currCtrl.calcIdq.Q) * CURRENT_SCALE;
+
+    if (g_bStartCurrentAutoTune)
+    {
+        s_param_id_debug_data.i_avg_a = g_rs_ident.Rs;
+        s_param_id_debug_data.v_avg_v = g_rs_ident.ldDutyAmplitude;
+    }
+    else if (g_bStartSpeedAutoTune)
+    {
+        s_param_id_debug_data.i_avg_a = g_speedAutoTuneResult.kp_A_per_eHz;
+        s_param_id_debug_data.v_avg_v = g_speedAutoTuneResult.ki_A_per_eHz_s;
+    }
+    else
+    {
+        s_param_id_debug_data.i_avg_a = 0.0f;
+        s_param_id_debug_data.v_avg_v = 0.0f;
+    }
 }
 
 static void ParamId_ForceSafeOutput(void)
@@ -379,13 +464,13 @@ static void ParamId_ApplyCurrentPiFromResult(const ParamIdResult_t *r)
     {
         return;
     }
-    if (r->validLq)
-    {
-        L = r->lq_h;
-    }
-    else if (r->validLd && r->validLq)
+    if (r->validLd && r->validLq)
     {
         L = 0.5f * (r->ld_h + r->lq_h);
+    }
+    else if (r->validLq)
+    {
+        L = r->lq_h;
     }
     else if (r->validLd)
     {
@@ -544,6 +629,7 @@ void ParamId_Init(ParamIdHandle_t *h)
     h->state = PARAM_ID_STATE_IDLE;
     h->requestedStep = PARAM_ID_STEP_ALL;
     h->activeStep = PARAM_ID_STEP_RS;
+    ParamId_SyncResultFromSG(&h->result);
 }
 
 ParamIdRet_t ParamId_SetConfig(ParamIdHandle_t *h, const ParamIdConfig_t *cfg)
@@ -615,6 +701,11 @@ const ParamIdResult_t *ParamId_GetResult(const ParamIdHandle_t *h)
     {
         return NULL;
     }
+    if (h == &s_param_id_module)
+    {
+        ParamId_SyncResultFromSG(&s_param_id_module.result);
+        return &s_param_id_module.result;
+    }
     return &h->result;
 }
 
@@ -625,511 +716,71 @@ void ParamId_GetDebugData(ParamIdDebugData_t *data)
         return;
     }
 
+    ParamId_SyncDebugFromSG();
     *data = s_param_id_debug_data;
 }
 
 /* ---------- Core state machine ---------- */
 void ParamId_Service(ParamIdHandle_t *h)
 {
-    static float sumA = 0.0f;
-    static float sumB = 0.0f;
-    static float sumCurrentA = 0.0f;
-    static float sumVoltageV = 0.0f;
-    static float sumCurrentSq = 0.0f;
-    static float sumVoltageCurrent = 0.0f;
-    static float phaseStartCurrA = 0.0f;
-    static float phaseEndCurrA = 0.0f;
-    static float phaseVoltAcc = 0.0f;
-    static uint16_t phaseSampleCount = 0U;
-    static float lTraceCurrent[PARAM_ID_L_TRACE_MAX];
-    static uint32_t lockStartRawNative = 0U;
-    static ParamIdJBCache_t jbCache;
-
+    /*
+     * 0512 当前不再运行独立的旧参数辨识状态机。
+     * 结果由 SG 风格的 CurrAutoTune / SpeedAutoTune 直接产出，
+     * 这里只保留接口兼容，不再驱动旧的 step-response 计算链路。
+     */
     if (h == NULL)
     {
         return;
     }
 
-    if (h->state == PARAM_ID_STATE_IDLE || h->state == PARAM_ID_STATE_DONE || h->state == PARAM_ID_STATE_FAULT)
+    ParamId_SyncResultFromSG(&h->result);
+    ParamId_SyncDebugFromSG();
+
+    if (g_bStartCurrentAutoTune)
     {
-        return;
+        h->state = PARAM_ID_STATE_RUN;
     }
-
-    h->tick++;
-    h->subTick++;
-    s_param_id_debug_data.calc_id_a = ParamId_GetIdA();
-    s_param_id_debug_data.calc_iq_a = ParamId_GetIqA();
-
-    if (h->stopRequested)
+    else if (g_bStartSpeedAutoTune)
     {
-        ParamId_ForceSafeOutput();
-        h->state = PARAM_ID_STATE_IDLE;
-        return;
+        h->state = PARAM_ID_STATE_RUN;
     }
-
-    if (!ParamId_CheckProtection(h))
+    else if (g_rs_ident.state == CURR_AUTOTUNE_FAULT ||
+             g_speedAutoTuneResult.state == SPEED_AUTOTUNE_FAULT)
     {
-        ParamId_ForceSafeOutput();
         h->state = PARAM_ID_STATE_FAULT;
-        return;
     }
-
-    if (h->state == PARAM_ID_STATE_PREPARE)
+    else if (ParamId_CurrentAutoTuneHasValidResult() || ParamId_SpeedAutoTuneHasValidResult())
     {
-        sumA = 0.0f;
-        sumB = 0.0f;
-        sumCurrentA = 0.0f;
-        sumVoltageV = 0.0f;
-        sumCurrentSq = 0.0f;
-        sumVoltageCurrent = 0.0f;
-        phaseStartCurrA = 0.0f;
-        phaseEndCurrA = 0.0f;
-        phaseVoltAcc = 0.0f;
-        phaseSampleCount = 0U;
-        memset(lTraceCurrent, 0, sizeof(lTraceCurrent));
-
-        MC_Set_Control_Mode(CTRL_MODE_OPEN_LOOP);
-        MC_Set_Speed_Reference(0.0f);
-
-        Duty_Ddq_t duty = {0};
-        duty.D = FIXP30(0.0f);
-        duty.Q = FIXP30(0.0f);
-        MC_Set_Duty_Cycle(duty);
-
-        h->subTick = 0U;
-        if (ParamId_IsLockRequiredStep(h->activeStep))
-        {
-            lockStartRawNative = Get_Angle_RawNative();
-            h->state = PARAM_ID_STATE_LOCK_CHECK;
-        }
-        else
-        {
-            if (h->activeStep == PARAM_ID_STEP_KE)
-            {
-                ParamId_JBReset(&jbCache);
-            }
-            h->state = PARAM_ID_STATE_RUN;
-        }
-        return;
+        h->state = PARAM_ID_STATE_DONE;
     }
-
-    if (h->state == PARAM_ID_STATE_LOCK_CHECK)
+    else
     {
-        /*
-         * Rotor lock verification for static tests (Rs/Ld/Lq):
-         * 1) Angle raw drift must stay within threshold.
-         * 2) Speed must stay near zero.
-         * Both must hold for lockCheckTicks.
-         */
-        uint32_t nowRawNative = Get_Angle_RawNative();
-        uint32_t nativeCounts = Get_Angle_CountNative();
-        uint32_t rawDiff = ParamId_AngleRawDiffNative(nowRawNative, lockStartRawNative, nativeCounts);
-        uint32_t rawLimit = ParamId_CompatDeltaToNative(h->cfg.lockMaxAngleDeltaRaw, nativeCounts);
-        float speedAbsRpm = ParamId_AbsF(ParamId_GetSpeedRpm());
-        if (rawDiff > rawLimit || speedAbsRpm > h->cfg.lockMaxSpeedRpm)
-        {
-            ParamId_ForceSafeOutput();
-            h->state = PARAM_ID_STATE_FAULT;
-            return;
-        }
-        if (h->subTick >= h->cfg.lockCheckTicks)
-        {
-            h->subTick = 0U;
-            h->state = PARAM_ID_STATE_RUN;
-        }
-        return;
+        h->state = PARAM_ID_STATE_IDLE;
     }
+}
 
-    /* Main run branch */
-    switch (h->activeStep)
-    {
-        case PARAM_ID_STEP_RS:
-        {
-            /* Lock rotor and inject small d-axis duty, then estimate Rs from V/I. */
-            float targetA = h->cfg.rsCurrentA;
-            const float dutyQ = 0.06f;
-            float rsEstimate = 0.0f;
-
-            Duty_Ddq_t duty = {0};
-            duty.D = FIXP30(dutyQ);
-            duty.Q = FIXP30(0.0f);
-            MC_Set_Duty_Cycle(duty);
-
-            if (h->subTick > h->cfg.settleTicks)
-            {
-                float irA;
-                float isA;
-                float itA;
-                float vrV;
-                float vsV;
-                float vtV;
-                float currentMag;
-                float voltageMag;
-
-                ParamId_GetPhaseCurrentsA(&irA, &isA, &itA);
-                ParamId_GetAppliedPhaseVoltages(&vrV, &vsV, &vtV);
-                currentMag = sqrtf((irA * irA) + (isA * isA) + (itA * itA));
-                voltageMag = sqrtf((vrV * vrV) + (vsV * vsV) + (vtV * vtV));
-
-                sumCurrentA += currentMag;
-                sumVoltageV += voltageMag;
-                sumCurrentSq += (irA * irA) + (isA * isA) + (itA * itA);
-                sumVoltageCurrent += (vrV * irA) + (vsV * isA) + (vtV * itA);
-
-                s_param_id_debug_data.i_avg_a = sumCurrentA / (float)(h->subTick - h->cfg.settleTicks);
-                s_param_id_debug_data.v_avg_v = sumVoltageV / (float)(h->subTick - h->cfg.settleTicks);
-            }
-
-            if (h->subTick >= (uint16_t)(h->cfg.settleTicks + h->cfg.sampleTicks))
-            {
-                float sampleCount = (float)h->cfg.sampleTicks;
-                float iAvg = sumCurrentA / sampleCount;
-                float vAvg = sumVoltageV / sampleCount;
-                if (ParamId_AbsF(iAvg) > (0.1f * targetA))
-                {
-                    rsEstimate = (sumCurrentSq > 1e-6f) ? (sumVoltageCurrent / sumCurrentSq) : 0.0f;
-                    if ((rsEstimate > PARAM_ID_RS_MIN_OHM) && (rsEstimate < PARAM_ID_RS_MAX_OHM))
-                    {
-                        h->result.rs_ohm = rsEstimate;
-                        h->result.validRs = true;
-                        g_axis.fRs = h->result.rs_ohm;
-                    }
-                    else
-                    {
-                        h->result.rs_ohm = 0.0f;
-                        h->result.validRs = false;
-                    }
-                }
-
-                s_param_id_debug_data.i_avg_a = iAvg;
-                s_param_id_debug_data.v_avg_v = vAvg;
-
-                h->subTick = 0U;
-                if (h->requestedStep == PARAM_ID_STEP_ALL)
-                {
-                    h->activeStep = ParamId_NextStep(h->activeStep);
-                    h->state = PARAM_ID_STATE_PREPARE;
-                }
-                else
-                {
-                    ParamId_ForceSafeOutput();
-                    h->state = PARAM_ID_STATE_DONE;
-                }
-            }
-            break;
-        }
-
-        case PARAM_ID_STEP_LD:
-        case PARAM_ID_STEP_LQ:
-        {
-            /*
-             * Step-response identification:
-             * apply a fixed d/q-axis voltage step while rotor is locked, record
-             * current response, then estimate tau at the 63.2% point of the RL
-             * first-order curve. Finally L = tau * Rs.
-             */
-            bool isD = (h->activeStep == PARAM_ID_STEP_LD);
-            float stepA = isD ? h->cfg.ldStepCurrentA : h->cfg.lqStepCurrentA;
-            float stepDuty = PARAM_ID_L_STEP_DUTY;
-            float currA;
-            float vAxis;
-            float lavg = 0.0f;
-            float rsComp = h->result.validRs ? h->result.rs_ohm : g_axis.fRs;
-            const float dt = 1.0f / (float)TF_REGULATION_RATE;
-            uint16_t sampleIndex = 0U;
-            uint16_t finalWindowTicks = (uint16_t)(h->cfg.sampleTicks / PARAM_ID_L_FINAL_AVG_DIV);
-            float iStart;
-            float iFinal = 0.0f;
-            float deltaI;
-            float threshold;
-            uint16_t tauIndex = 0xFFFFU;
-
-            Duty_Ddq_t duty = {0};
-
-            if (stepA > 0.0f)
-            {
-                float normalizedDuty = stepA / CURRENT_SCALE;
-                if (normalizedDuty < stepDuty)
-                {
-                    stepDuty = normalizedDuty;
-                }
-            }
-            if (stepDuty < PARAM_ID_L_MIN_STEP_DUTY)
-            {
-                stepDuty = PARAM_ID_L_MIN_STEP_DUTY;
-            }
-            if (stepDuty > PARAM_ID_L_MAX_STEP_DUTY)
-            {
-                stepDuty = PARAM_ID_L_MAX_STEP_DUTY;
-            }
-            if (finalWindowTicks < 8U)
-            {
-                finalWindowTicks = 8U;
-            }
-            if (finalWindowTicks > h->cfg.sampleTicks)
-            {
-                finalWindowTicks = h->cfg.sampleTicks;
-            }
-
-            if (h->subTick <= h->cfg.settleTicks)
-            {
-                if (isD)
-                {
-                    duty.D = FIXP30(0.0f);
-                    duty.Q = FIXP30(0.0f);
-                }
-                else
-                {
-                    duty.D = FIXP30(0.0f);
-                    duty.Q = FIXP30(0.0f);
-                }
-            }
-            else
-            {
-                if (isD)
-                {
-                    duty.D = FIXP30(stepDuty);
-                    duty.Q = FIXP30(0.0f);
-                }
-                else
-                {
-                    duty.D = FIXP30(0.0f);
-                    duty.Q = FIXP30(stepDuty);
-                }
-            }
-            MC_Set_Duty_Cycle(duty);
-
-            if (h->subTick == h->cfg.settleTicks)
-            {
-                phaseStartCurrA = isD ? ParamId_GetIdA() : ParamId_GetIqA();
-                phaseEndCurrA = phaseStartCurrA;
-                phaseVoltAcc = 0.0f;
-                phaseSampleCount = 0U;
-            }
-            else if (h->subTick > h->cfg.settleTicks)
-            {
-                sampleIndex = (uint16_t)(h->subTick - h->cfg.settleTicks - 1U);
-                currA = isD ? ParamId_GetIdA() : ParamId_GetIqA();
-                vAxis = ParamId_GetAppliedVoltageAxis(isD);
-
-                if (sampleIndex == 0U)
-                {
-                    phaseStartCurrA = currA;
-                    phaseEndCurrA = currA;
-                }
-
-                if (sampleIndex < PARAM_ID_L_TRACE_MAX)
-                {
-                    lTraceCurrent[sampleIndex] = currA;
-                }
-
-                phaseVoltAcc += vAxis;
-                phaseSampleCount++;
-                phaseEndCurrA = currA;
-                sumCurrentA += currA;
-
-                if (sampleIndex >= (uint16_t)(h->cfg.sampleTicks - finalWindowTicks))
-                {
-                    sumA += currA;
-                    sumB += 1.0f;
-                }
-            }
-
-            if (h->subTick >= (uint16_t)(h->cfg.settleTicks + h->cfg.sampleTicks))
-            {
-                if ((sumB > 0.0f) && (rsComp > PARAM_ID_RS_MIN_OHM))
-                {
-                    iStart = phaseStartCurrA;
-                    iFinal = sumA / sumB;
-                    deltaI = iFinal - iStart;
-                    threshold = iStart + 0.632f * deltaI;
-                    s_param_id_debug_data.i_avg_a = iFinal;
-                    s_param_id_debug_data.v_avg_v = phaseVoltAcc / (float)phaseSampleCount;
-
-                    if (ParamId_AbsF(deltaI) > 0.02f)
-                    {
-                        uint16_t maxSamples = h->cfg.sampleTicks;
-                        if (maxSamples > PARAM_ID_L_TRACE_MAX)
-                        {
-                            maxSamples = PARAM_ID_L_TRACE_MAX;
-                        }
-
-                        for (uint16_t i = 0U; i < maxSamples; i++)
-                        {
-                            float sampleI = lTraceCurrent[i];
-                            bool crossed = (deltaI >= 0.0f) ? (sampleI >= threshold) : (sampleI <= threshold);
-                            if (crossed)
-                            {
-                                tauIndex = i;
-                                break;
-                            }
-                        }
-
-                        if (tauIndex != 0xFFFFU)
-                        {
-                            float tau = ((float)(tauIndex + 1U)) * dt;
-                            lavg = tau * rsComp;
-                        }
-                    }
-                }
-
-                if ((lavg > PARAM_ID_L_MIN_H) && (lavg < PARAM_ID_L_MAX_H))
-                {
-                    if (isD)
-                    {
-                        h->result.ld_h = lavg;
-                        h->result.validLd = true;
-                        g_axis.fLs = lavg;
-                    }
-                    else
-                    {
-                        h->result.lq_h = lavg;
-                        h->result.validLq = true;
-                        g_axis.fLs = lavg;
-                    }
-                }
-                else if (isD)
-                {
-                    h->result.ld_h = 0.0f;
-                    h->result.validLd = false;
-                }
-                else
-                {
-                    h->result.lq_h = 0.0f;
-                    h->result.validLq = false;
-                }
-
-                h->subTick = 0U;
-                if (h->requestedStep == PARAM_ID_STEP_ALL && h->activeStep != PARAM_ID_STEP_KE)
-                {
-                    h->activeStep = ParamId_NextStep(h->activeStep);
-                    h->state = PARAM_ID_STATE_PREPARE;
-                }
-                else
-                {
-                    ParamId_ForceSafeOutput();
-                    h->state = PARAM_ID_STATE_DONE;
-                }
-            }
-            break;
-        }
-
-        case PARAM_ID_STEP_KE:
-        {
-            /*
-             * Run low-speed closed-loop speed mode and estimate Ke:
-             * Ke = (Vq - Rs * Iq) / we
-             */
-            MC_Set_Control_Mode(CTRL_MODE_SPEED);
-            MC_Set_Speed_Reference(h->cfg.keTargetSpeedRpm);
-
-            if (h->subTick > h->cfg.settleTicks)
-            {
-                float vq = ParamId_GetAppliedVoltageAxis(false);
-                float iq = ParamId_GetIqA();
-                float rs = h->result.validRs ? h->result.rs_ohm : 0.0f;
-                float we = ParamId_GetElecSpeedRadPs();
-                if (ParamId_AbsF(we) > 1e-3f)
-                {
-                    float ke = (vq - rs * iq) / we;
-                    sumA += ke;
-                    sumB += 1.0f;
-
-                    /* Use Ke~Kt approximation in SI for J/B fit under no-load test. */
-                    {
-                        float kt = h->result.validKe ? h->result.ke_v_per_rad_s : ke;
-                        float te = kt * iq;
-                        float dt = 1.0f / (float)TF_REGULATION_RATE;
-                        ParamId_JBPush(&jbCache, we, te, dt);
-                    }
-                }
-            }
-
-            if (h->subTick >= (uint16_t)(h->cfg.settleTicks + h->cfg.sampleTicks))
-            {
-                if (sumB > 0.0f)
-                {
-                    h->result.ke_v_per_rad_s = sumA / sumB;
-                    h->result.validKe = true;
-                    g_axis.fKt = h->result.ke_v_per_rad_s;
-                }
-
-                /* Finalize J/B estimation. */
-                ParamId_JBSolve(&jbCache);
-
-                /* Apply PI retune from identified R/L immediately after full identification. */
-                ParamId_ApplyCurrentPiFromResult(&h->result);
-
-                /* Build a complete persistence snapshot (including pole pairs and J/B). */
-                {
-                    ParamIdFlashData_t snapshot;
-                    ParamId_BuildFlashData(&snapshot, &h->result, &jbCache);
-                    s_param_id_flash_pending_data = snapshot;
-                    s_param_id_flash_save_pending = true;
-                }
-
-                MC_Set_Speed_Reference(0.0f);
-                ParamId_ForceSafeOutput();
-                h->state = PARAM_ID_STATE_DONE;
-            }
-            break;
-        }
-
-        default:
-            ParamId_ForceSafeOutput();
-            h->state = PARAM_ID_STATE_FAULT;
-            break;
-    }
+static void ParamId_LegacyServiceUnused(ParamIdHandle_t *h)
+{
+    (void)h;
 }
 
 bool ParamId_SaveToFlash(const ParamIdFlashData_t *data)
 {
-    if (data == NULL)
-    {
-        return false;
-    }
-
-    ParamIdFlashData_t blob = *data;
-    blob.magic = PARAM_ID_FLASH_MAGIC;
-    blob.version = PARAM_ID_FLASH_VERSION;
-    blob.crc32 = 0U;
-    blob.crc32 = ParamId_Crc32((const uint8_t *)&blob, (uint32_t)(sizeof(blob) - sizeof(blob.crc32)));
-    return ParamId_FlashWritePage(PARAM_ID_FLASH_ADDR, &blob, (uint32_t)sizeof(blob));
+    (void)data;
+    return false;
 }
 
 bool ParamId_LoadFromFlash(ParamIdFlashData_t *data)
 {
-    if (data == NULL)
-    {
-        return false;
-    }
-
-    const ParamIdFlashData_t *blob = (const ParamIdFlashData_t *)PARAM_ID_FLASH_ADDR;
-    if (blob->magic != PARAM_ID_FLASH_MAGIC || blob->version != PARAM_ID_FLASH_VERSION)
-    {
-        return false;
-    }
-
-    uint32_t crc = ParamId_Crc32((const uint8_t *)blob, (uint32_t)(sizeof(*blob) - sizeof(blob->crc32)));
-    if (crc != blob->crc32)
-    {
-        return false;
-    }
-
-    if (!ParamId_IsValidCanNodeId(blob->can_node_id))
-    {
-        return false;
-    }
-
-    *data = *blob;
-    return true;
+    (void)data;
+    return false;
 }
 
 bool ParamId_ClearFlash(void)
 {
     s_param_id_flash_save_pending = false;
     memset(&s_param_id_flash_pending_data, 0, sizeof(s_param_id_flash_pending_data));
-    return ParamId_FlashErasePage(PARAM_ID_FLASH_ADDR);
+    return false;
 }
 
 bool ParamId_ApplyFlashDataToAxis(const ParamIdFlashData_t *data)
@@ -1196,23 +847,7 @@ bool ParamId_SetCanNodeId(uint8_t nodeId)
 
 bool ParamId_SaveCanNodeIdToFlash(uint8_t nodeId)
 {
-    ParamIdFlashData_t data;
-    bool hasExistingFlash = false;
-
     if (!ParamId_IsValidCanNodeId(nodeId))
-    {
-        return false;
-    }
-
-    memset(&data, 0, sizeof(data));
-    hasExistingFlash = ParamId_LoadFromFlash(&data);
-    if (!hasExistingFlash)
-    {
-        ParamId_BuildFlashData(&data, &s_param_id_module.result, NULL);
-    }
-
-    data.can_node_id = nodeId;
-    if (!ParamId_SaveToFlash(&data))
     {
         return false;
     }
@@ -1223,24 +858,19 @@ bool ParamId_SaveCanNodeIdToFlash(uint8_t nodeId)
 
 void ParamId_ModuleInit(void)
 {
-    ParamIdFlashData_t defaultData;
-
     ParamId_Init(&s_param_id_module);
     s_param_id_flash_save_pending = false;
     memset(&s_param_id_flash_pending_data, 0, sizeof(s_param_id_flash_pending_data));
     s_can_node_id = 1U;
     ParamId_ResetDebugData();
-
-    if (!ParamId_LoadFromFlash(&defaultData))
-    {
-        ParamId_BuildDefaultFlashData(&defaultData);
-        (void)ParamId_SaveToFlash(&defaultData);
-    }
+    ParamId_SyncResultFromSG(&s_param_id_module.result);
 }
 
 ParamIdRet_t ParamId_ModuleStart(ParamIdStep_t step)
 {
-    return ParamId_Start(&s_param_id_module, step);
+    ParamIdRet_t ret = ParamId_Start(&s_param_id_module, step);
+    ParamId_SyncResultFromSG(&s_param_id_module.result);
+    return ret;
 }
 
 ParamIdRet_t ParamId_ModuleStop(void)
@@ -1255,21 +885,56 @@ void ParamId_ModuleService(void)
 
 void ParamId_ModuleBackgroundService(void)
 {
-    if (!s_param_id_flash_save_pending)
-    {
-        return;
-    }
-
-    (void)ParamId_SaveToFlash(&s_param_id_flash_pending_data);
+    /*
+     * Flash persistence is intentionally disabled for now.
+     * Keep the framework and payload types in place, but do not write.
+     */
     s_param_id_flash_save_pending = false;
 }
 
 ParamIdState_t ParamId_ModuleGetState(void)
 {
-    return ParamId_GetState(&s_param_id_module);
+    if (g_bStartCurrentAutoTune)
+    {
+        if (g_rs_ident.state == CURR_AUTOTUNE_FAULT)
+        {
+            return PARAM_ID_STATE_FAULT;
+        }
+        if (g_rs_ident.state == CURR_AUTOTUNE_FINISH || g_rs_ident.state == CURR_AUTOTUNE_RECOVER)
+        {
+            return PARAM_ID_STATE_DONE;
+        }
+        return PARAM_ID_STATE_RUN;
+    }
+
+    if (g_bStartSpeedAutoTune)
+    {
+        if (g_speedAutoTuneResult.state == SPEED_AUTOTUNE_FAULT)
+        {
+            return PARAM_ID_STATE_FAULT;
+        }
+        if (g_speedAutoTuneResult.state == SPEED_AUTOTUNE_FINISH || g_speedAutoTuneResult.state == SPEED_AUTOTUNE_RECOVER)
+        {
+            return PARAM_ID_STATE_DONE;
+        }
+        return PARAM_ID_STATE_RUN;
+    }
+
+    if (ParamId_CurrentAutoTuneIsFinal() || ParamId_SpeedAutoTuneIsFinal())
+    {
+        if (g_rs_ident.state == CURR_AUTOTUNE_FAULT ||
+            g_speedAutoTuneResult.state == SPEED_AUTOTUNE_FAULT)
+        {
+            return PARAM_ID_STATE_FAULT;
+        }
+        return PARAM_ID_STATE_DONE;
+    }
+
+    return PARAM_ID_STATE_IDLE;
 }
 
 const ParamIdResult_t *ParamId_ModuleGetResult(void)
 {
+    ParamId_SyncResultFromSG(&s_param_id_module.result);
     return ParamId_GetResult(&s_param_id_module);
 }

@@ -123,17 +123,21 @@ MC_RetStatus_t MC_Calib_StartChain(void)
 		return MC_FAILED;
 	}
 
-	g_mc_calib_go_run_after_finish = 0U;
-	MC_Reset_Control_State();
+	if (MC_Start_Motor() != MC_SUCCESS)
+	{
+		return MC_FAILED;
+	}
+
 	CurrAutoTune_Start();
 	g_bStartSpeedAutoTune = false;
 	g_bStartCurrentAutoTune = true;
-	g_axis.state = AXIS_STATE_OFFSET_CALIB;
 	return MC_SUCCESS;
 }
 
 MC_RetStatus_t MC_Calib_StartParam(ParamIdStep_t step)
 {
+	ParamIdRet_t paramRet;
+
 	if (step != PARAM_ID_STEP_ALL)
 	{
 		return MC_FAILED;
@@ -149,13 +153,22 @@ MC_RetStatus_t MC_Calib_StartParam(ParamIdStep_t step)
 		return MC_FAILED;
 	}
 
-	g_mc_calib_go_run_after_finish = 0U;
-	MC_Reset_Control_State();
+	paramRet = ParamId_ModuleStart(step);
+	if (paramRet != PARAM_ID_OK)
+	{
+		return MC_FAILED;
+	}
+
+	if (MC_Start_Motor() != MC_SUCCESS)
+	{
+		(void)ParamId_ModuleStop();
+		return MC_FAILED;
+	}
+
 	SpeedAutoTune_Start(SPEED_AUTOTUNE_DEFAULT_CURRENT_A);
 	CurrAutoTune_Start();
 	g_bStartCurrentAutoTune = true;
 	g_bStartSpeedAutoTune = true;
-	g_axis.state = AXIS_STATE_OFFSET_CALIB;
 	return MC_SUCCESS;
 }
 

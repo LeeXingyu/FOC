@@ -14,12 +14,16 @@ typedef struct
     uint8_t axis_error;
     uint8_t control_mode;
     uint8_t param_state;
+    uint16_t cia402_statusword;
+    uint8_t cia402_mode;
+    uint8_t reserved0;
     float position_deg;
     float position_cont_deg;
     float position_mech_deg;
     float position_app_pu;
     float position_app_deg;
     float speed_rpm;
+    float speed_ref_rpm;
     float speed_meas_rpm;
     float speed_error_rpm;
     float speed_meas_pu;
@@ -28,6 +32,8 @@ typedef struct
     float current_q_raw_a;
     float current_q_a;
     float current_ref_q_a;
+    float torque_ref_a;
+    float torque_meas_a;
 } CDC_DebugTelemetry_t;
 
 void CDC_Debug_Init(void);

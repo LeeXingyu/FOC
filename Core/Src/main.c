@@ -33,6 +33,8 @@
 #include "motor_control.h"
 #include "MotorControl/Tasks/mc_tasks.h"
 #include "motor_parameters.h"
+#include "Board/LAN9253/define.h"
+#include "el9800hw.h"
 #include "Communication/ethercat.h"
 #include "Communication/mcp2518fd/can_telemetry.h"
 #include "Communication/cdc_debug.h"
@@ -60,9 +62,11 @@ extern osThreadId_t Comm_TaskHandle;
 
 /* USER CODE BEGIN PV */
 Axis_t g_axis;
+TCiA402Axis *g_pCiA402Axis = NULL;
 uint8_t uart_data_ready = 0;
 ADC_Rule_Data_t g_adc_Rule_ID_Tem;
 Comm_Protocol_t g_system_comm_mode = COMM_PROTO_UNKNOWN;
+volatile uint8_t g_comm_protocol_locked = 0U;
 volatile uint8_t g_adc2_rule_dma_done = 0U;
 uint16_t g_adc2_rule_dma_buf[4] = {0U};
 volatile uint8_t g_mc_calib_go_run_after_finish = 0U;
@@ -91,9 +95,9 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-	  uint16_t ctrl = 0;
-	  uint16_t csa = 0;
-	  uint8_t status = 0 ;
+  uint16_t ctrl = 0;
+  uint16_t csa = 0;
+  uint8_t status = 0 ;
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -120,6 +124,7 @@ int main(void)
   MX_SPI1_Init();
   MX_SPI2_Init();
   MX_SPI3_Init();
+  MX_TIM4_Init();
   MX_TIM1_Init();
   MX_TIM3_Init();
   MX_CORDIC_Init();
@@ -138,25 +143,7 @@ int main(void)
   //status = DRV8353_SelfTest(&ctrl, &csa);
   ADC_Rule_Collect(&hadc2, &g_adc_Rule_ID_Tem);
   DRV8353_CS_HIGH();
-#if defined(APP_COMM_USE_CDC_ONLY) && (APP_COMM_USE_CDC_ONLY != 0)
-  g_system_comm_mode = COMM_PROTO_CDC;
-#else
-  if (g_system_comm_mode == COMM_PROTO_CAN)
-  {
-    SPI2_SwitchDevice(SPI2_DEV_MCP2518FD);
-    HAL_Delay(1000);
-    CANFD_INIT();
-    CAN_Telemetry_Init();
-   // MCP2518FD_Service1ms();
-  }
-  else if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
-  {
-    SPI2_SwitchDevice(SPI2_DEV_LAN9253);
-    HAL_Delay(1000);
-    LAN9253_Init();
-  }
-
-#endif
+  Comm_Protocol_Startup();
   
   /* USER CODE END 2 */
 
@@ -269,6 +256,37 @@ void ADC_Rule_Collect(ADC_HandleTypeDef* hadc, ADC_Rule_Data_t* data)
   data->raw_TSENC = g_adc2_rule_dma_buf[3] >> 4;
 }
 
+void Comm_Protocol_Startup(void)
+{
+#if defined(APP_COMM_USE_CDC_ONLY) && (APP_COMM_USE_CDC_ONLY != 0)
+  g_system_comm_mode = COMM_PROTO_CDC;
+#else
+  switch (g_system_comm_mode)
+  {
+    case COMM_PROTO_CAN:
+      SPI2_SwitchDevice(SPI2_DEV_MCP2518FD);
+      HAL_Delay(1000);
+      CANFD_INIT();
+      CAN_Telemetry_Init();
+      break;
+
+    case COMM_PROTO_ETHERCAT:
+      SPI2_SwitchDevice(SPI2_DEV_LAN9253);
+      HAL_Delay(1000);
+      LAN9253_Init();
+      break;
+
+    case COMM_PROTO_CDC:
+    case COMM_PROTO_UNKNOWN:
+    default:
+      g_system_comm_mode = COMM_PROTO_CDC;
+      break;
+  }
+#endif
+
+  g_comm_protocol_locked = 1U;
+}
+
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef *hadc)
 {
   if (hadc->Instance == ADC2)
@@ -292,6 +310,14 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
     g_axis.error = (AxisError_t)(g_axis.error | AXIS_ERROR_GATE_DRIVER);
     g_axis.state = AXIS_STATE_FAULT_NOW;
     return;
+  }
+
+  if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
+  {
+    if (ECAT_HandleExtiInterrupt(GPIO_Pin) != 0U)
+    {
+      return;
+    }
   }
 
   if (GPIO_Pin == COMM_IO1_Pin)

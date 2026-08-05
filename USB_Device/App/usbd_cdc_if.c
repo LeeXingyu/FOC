@@ -17,6 +17,7 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "Communication/cdc_debug.h"
+#include "MotorControl/Core/motor_parameters.h"
 #include "MotorControl/Core/mc_interface.h"
 #include "MotorControl/Tasks/mc_tasks.h"
 #include "MotorControl/Control/param_identify.h"
@@ -26,7 +27,7 @@
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
 #define CDC_RX_LINE_MAX        128U
-#define CDC_TX_LINE_MAX        192U
+#define CDC_TX_LINE_MAX        256U
 #define CDC_TELEM_PERIOD_MS    20U
 
 typedef struct
@@ -40,6 +41,7 @@ typedef struct
 {
     CDC_DebugTelemetry_t latest;
     uint32_t last_tick_ms;
+    uint32_t sequence;
     uint8_t valid;
 } CDC_TelemetryCache_t;
 
@@ -47,6 +49,8 @@ static CDC_RxState_t s_cdc_rx = {0};
 static CDC_TelemetryCache_t s_cdc_telem = {0};
 static uint8_t s_cdc_tx_busy = 0U;
 static char s_cdc_tx_line[CDC_TX_LINE_MAX];
+static uint8_t s_param_auto_report_pending = 0U;
+static uint8_t s_prev_param_state = (uint8_t)PARAM_ID_STATE_IDLE;
 
 uint8_t UserRxBufferFS[APP_RX_DATA_SIZE];
 uint8_t UserTxBufferFS[APP_TX_DATA_SIZE];
@@ -56,12 +60,15 @@ static uint8_t CDC_SendFormat(const char *fmt, ...);
 static uint8_t CDC_SendBuffered(const char *buf, size_t len);
 static void CDC_AppendFixed6(char *dst, size_t dst_len, float value);
 static void CDC_HandleLine(const char *line);
-static void CDC_SendTelemetryLine(void);
+static uint8_t CDC_SendTelemetryLine(void);
 static bool CDC_ParseU8(const char *text, uint8_t *value);
 static bool CDC_ParseFloat(const char *text, float *value);
 static void CDC_TrimInPlace(char *s);
 static uint8_t CDC_HexNibble(char c);
 static bool CDC_ParseHexBytes(const char *text, uint8_t *out, uint8_t maxLen, uint8_t *outLen);
+static bool CDC_ParseU16(const char *text, uint16_t *value);
+static void CDC_SendCia402StatusLine(const char *prefix);
+static uint8_t CDC_SendParamResultLine(const char *prefix);
 
 static int8_t CDC_Init_FS(void);
 static int8_t CDC_DeInit_FS(void);
@@ -84,6 +91,7 @@ void CDC_Debug_Init(void)
     s_cdc_rx.ready = 0U;
     s_cdc_tx_busy = 0U;
     s_cdc_telem.last_tick_ms = 0U;
+    s_cdc_telem.sequence = 0U;
     s_cdc_telem.valid = 0U;
 }
 
@@ -344,6 +352,26 @@ static bool CDC_ParseFloat(const char *text, float *value)
     return true;
 }
 
+static bool CDC_ParseU16(const char *text, uint16_t *value)
+{
+    char *end = NULL;
+    long v;
+
+    if ((text == NULL) || (value == NULL))
+    {
+        return false;
+    }
+
+    v = strtol(text, &end, 0);
+    if ((end == text) || (*end != '\0') || (v < 0) || (v > 65535))
+    {
+        return false;
+    }
+
+    *value = (uint16_t)v;
+    return true;
+}
+
 static uint8_t CDC_HexNibble(char c)
 {
     if ((c >= '0') && (c <= '9')) return (uint8_t)(c - '0');
@@ -411,7 +439,17 @@ static void CDC_QueueTelemetry(const CDC_DebugTelemetry_t *t)
     {
         return;
     }
+
+    if ((s_prev_param_state != (uint8_t)PARAM_ID_STATE_DONE) &&
+        (t->param_state == (uint8_t)PARAM_ID_STATE_DONE))
+    {
+        s_param_auto_report_pending = 1U;
+    }
+
+    s_prev_param_state = t->param_state;
     s_cdc_telem.latest = *t;
+    s_cdc_telem.sequence++;
+    s_cdc_telem.last_tick_ms = HAL_GetTick();
     s_cdc_telem.valid = 1U;
 }
 
@@ -425,7 +463,7 @@ bool CDC_Debug_Enabled(void)
     return true;
 }
 
-static void CDC_SendTelemetryLine(void)
+static uint8_t CDC_SendTelemetryLine(void)
 {
     char mech[24];
     char app[24];
@@ -436,11 +474,14 @@ static void CDC_SendTelemetryLine(void)
     char iqraw[24];
     char iq[24];
     char iqr[24];
+    char spref[24];
+    char tref[24];
+    char tact[24];
     char line[CDC_TX_LINE_MAX];
 
     if (s_cdc_telem.valid == 0U)
     {
-        return;
+        return USBD_FAIL;
     }
 
     CDC_AppendFixed6(mech, sizeof(mech), s_cdc_telem.latest.position_mech_deg);
@@ -452,24 +493,96 @@ static void CDC_SendTelemetryLine(void)
     CDC_AppendFixed6(iqraw, sizeof(iqraw), s_cdc_telem.latest.current_q_raw_a);
     CDC_AppendFixed6(iq, sizeof(iq), s_cdc_telem.latest.current_q_a);
     CDC_AppendFixed6(iqr, sizeof(iqr), s_cdc_telem.latest.current_ref_q_a);
+    CDC_AppendFixed6(spref, sizeof(spref), s_cdc_telem.latest.speed_ref_rpm);
+    CDC_AppendFixed6(tref, sizeof(tref), s_cdc_telem.latest.torque_ref_a);
+    CDC_AppendFixed6(tact, sizeof(tact), s_cdc_telem.latest.torque_meas_a);
 
     (void)snprintf(line,
                    sizeof(line),
-                   "TEL MECH=%s APP=%s SPD=%s SPMR=%s SPER=%s ID=%s IQRAW=%s IQ=%s IQR=%s AST=%u ERR=%u MODE=%u PST=%u\r\n",
+                   "TEL SEQ=%lu TMS=%lu MECH=%s APP=%s SPD=%s SPREF=%s SPMR=%s SPER=%s ID=%s IQRAW=%s IQ=%s IQR=%s TREF=%s TACT=%s CTRL=%u SW=0x%04X MO=%u AST=%u ERR=%u PST=%u\r\n",
+                   (unsigned long)s_cdc_telem.sequence,
+                   (unsigned long)s_cdc_telem.last_tick_ms,
                    mech,
                    app,
                    spd,
+                   spref,
                    spmr,
                    sper,
                    id,
                    iqraw,
                    iq,
                    iqr,
+                   tref,
+                   tact,
+                   (unsigned)s_cdc_telem.latest.control_mode,
+                   (unsigned)s_cdc_telem.latest.cia402_statusword,
+                   (unsigned)s_cdc_telem.latest.cia402_mode,
                    s_cdc_telem.latest.axis_state,
                    s_cdc_telem.latest.axis_error,
-                   s_cdc_telem.latest.control_mode,
                    s_cdc_telem.latest.param_state);
+    return CDC_SendBuffered(line, strlen(line));
+}
+
+static void CDC_SendCia402StatusLine(const char *prefix)
+{
+    char speed[24];
+    char tref[24];
+    char line[CDC_TX_LINE_MAX];
+
+    CDC_AppendFixed6(speed, sizeof(speed), s_cdc_telem.latest.speed_rpm);
+    CDC_AppendFixed6(tref, sizeof(tref), s_cdc_telem.latest.torque_ref_a);
+    (void)snprintf(line,
+                   sizeof(line),
+                   "%s SW=0x%04X MO=%u AST=%u ERR=%u CTRL=%u PST=%u SPEED=%s TREF=%s\r\n",
+                   (prefix != NULL) ? prefix : "CIA402",
+                   (unsigned)s_cdc_telem.latest.cia402_statusword,
+                   (unsigned)s_cdc_telem.latest.cia402_mode,
+                   (unsigned)s_cdc_telem.latest.axis_state,
+                   (unsigned)s_cdc_telem.latest.axis_error,
+                   (unsigned)s_cdc_telem.latest.control_mode,
+                   (unsigned)s_cdc_telem.latest.param_state,
+                   speed,
+                   tref);
     (void)CDC_SendBuffered(line, strlen(line));
+}
+
+static uint8_t CDC_SendParamResultLine(const char *prefix)
+{
+    const ParamIdResult_t *result = MC_Calib_GetParamResult();
+    char rs[24];
+    char ld[24];
+    char lq[24];
+    char ke[24];
+    char line[CDC_TX_LINE_MAX];
+    uint8_t validBits = 0U;
+
+    if (result == NULL)
+    {
+        CDC_SendString("PARAM ERR no_result\r\n");
+        return USBD_FAIL;
+    }
+
+    if (result->validRs) { validBits |= 0x01U; }
+    if (result->validLd) { validBits |= 0x02U; }
+    if (result->validLq) { validBits |= 0x04U; }
+    if (result->validKe) { validBits |= 0x08U; }
+
+    CDC_AppendFixed6(rs, sizeof(rs), result->rs_ohm);
+    CDC_AppendFixed6(ld, sizeof(ld), result->ld_h);
+    CDC_AppendFixed6(lq, sizeof(lq), result->lq_h);
+    CDC_AppendFixed6(ke, sizeof(ke), result->ke_v_per_rad_s);
+
+    (void)snprintf(line,
+                   sizeof(line),
+                   "%s VALID=0x%02X RS=%s LD=%s LQ=%s KE=%s PST=%u\r\n",
+                   (prefix != NULL) ? prefix : "PARAM",
+                   (unsigned)validBits,
+                   rs,
+                   ld,
+                   lq,
+                   ke,
+                   (unsigned)MC_Calib_GetParamState());
+    return CDC_SendBuffered(line, strlen(line));
 }
 
 static void CDC_HandleCanLikeCommand(uint8_t func, uint8_t node, const uint8_t *payload, uint8_t len)
@@ -568,7 +681,7 @@ static void CDC_HandleCanLikeCommand(uint8_t func, uint8_t node, const uint8_t *
                 {
                     ret = MC_Calib_StartChain();
                 }
-                else if (payload[0] == 5U)
+                else if ((payload[0] == 1U) || (payload[0] == 5U))
                 {
                     ret = MC_Calib_StartParam(PARAM_ID_STEP_ALL);
                 }
@@ -606,6 +719,90 @@ static void CDC_HandleCanLikeCommand(uint8_t func, uint8_t node, const uint8_t *
             {
                 CDC_SendFormat("DBG ERR 0x%03X bad_len\r\n", sid);
             }
+            break;
+        case 0x10U:
+            if (len == 2U)
+            {
+                uint16_t controlword = (uint16_t)((uint16_t)payload[0] | ((uint16_t)payload[1] << 8));
+                CDC_SendFormat((MC_Apply_Cia402_Controlword(controlword) == MC_SUCCESS) ?
+                                   "CIA402 CMD 0x%03X cw=0x%04X\r\n" :
+                                   "CIA402 ERR 0x%03X cw\r\n",
+                               sid,
+                               controlword);
+            }
+            else
+            {
+                CDC_SendFormat("DBG ERR 0x%03X bad_len\r\n", sid);
+            }
+            break;
+        case 0x11U:
+            if (len == 1U)
+            {
+                uint8_t mode = payload[0];
+                if ((mode == CIA402_MODE_PROFILE_POSITION) ||
+                    (mode == CIA402_MODE_PROFILE_VELOCITY) ||
+                    (mode == CIA402_MODE_PROFILE_TORQUE) ||
+                    (mode == CIA402_MODE_CYCLIC_SYNC_POSITION) ||
+                    (mode == CIA402_MODE_CYCLIC_SYNC_VELOCITY) ||
+                    (mode == CIA402_MODE_CYCLIC_SYNC_TORQUE))
+                {
+                    if ((mode == CIA402_MODE_PROFILE_POSITION) || (mode == CIA402_MODE_CYCLIC_SYNC_POSITION))
+                    {
+                        MC_Set_Control_Mode(CTRL_MODE_POSITION);
+                    }
+                    else if ((mode == CIA402_MODE_PROFILE_VELOCITY) || (mode == CIA402_MODE_CYCLIC_SYNC_VELOCITY))
+                    {
+                        MC_Set_Control_Mode(CTRL_MODE_SPEED);
+                    }
+                    else
+                    {
+                        MC_Set_Control_Mode(CTRL_MODE_TORQUE);
+                    }
+                    CDC_SendFormat("CIA402 CMD 0x%03X mode=%u\r\n", sid, mode);
+                }
+                else
+                {
+                    CDC_SendFormat("CIA402 ERR 0x%03X mode\r\n", sid);
+                }
+            }
+            else
+            {
+                CDC_SendFormat("DBG ERR 0x%03X bad_len\r\n", sid);
+            }
+            break;
+        case 0x12U:
+            if (len == 4U)
+            {
+                float v;
+                memcpy(&v, payload, 4U);
+                MC_Set_Speed_Reference(v);
+                CDC_SendFormat("CIA402 CMD 0x%03X speed=%.3f\r\n", sid, (double)v);
+            }
+            else
+            {
+                CDC_SendFormat("DBG ERR 0x%03X bad_len\r\n", sid);
+            }
+            break;
+        case 0x13U:
+            if (len == 2U)
+            {
+                int16_t iq_mA = (int16_t)((uint16_t)payload[0] | ((uint16_t)payload[1] << 8));
+                if (MC_Set_Torque_Reference((float)iq_mA / 1000.0f) == MC_SUCCESS)
+                {
+                    CDC_SendFormat("CIA402 CMD 0x%03X torque=%d mA\r\n", sid, (int)iq_mA);
+                }
+                else
+                {
+                    CDC_SendFormat("CIA402 ERR 0x%03X torque\r\n", sid);
+                }
+            }
+            else
+            {
+                CDC_SendFormat("DBG ERR 0x%03X bad_len\r\n", sid);
+            }
+            break;
+        case 0x14U:
+            CDC_SendCia402StatusLine("CIA402");
             break;
         default:
             CDC_SendFormat("DBG ERR 0x%03X unknown\r\n", sid);
@@ -651,15 +848,18 @@ static void CDC_HandleLine(const char *line)
     {
         CDC_SendString(
             "DBG CDC command set:\r\n"
-            "  start | stop | speedmode | posmode | vfmode\r\n"
-            "  speed <rpm>\r\n"
-            "  kp <value>\r\n"
-            "  ki <value>\r\n"
+            "  start | stop | speedmode | speedmodel | posmode | posimodel | vfmode | vfmodel\r\n"
+            "  speed <rpm> | sc <rpm>\r\n"
+            "  kp <value> | sp <value>\r\n"
+            "  ki <value> | si <value>\r\n"
             "  pole <n>\r\n"
             "  nodeget | nodeset <0-15>\r\n"
             "  flashread | flashclear\r\n"
-            "  calib <0|5> | calibstop\r\n"
-            "  can <func_hex> <node> <hexbytes>\r\n");
+            "  calib <0|1|5> | paramstart | measureparams | calibstop\r\n"
+            "  params | paramget\r\n"
+            "  can <func_hex> <node> <hexbytes>\r\n"
+            "  cia402 cw <u16> | cia402 mode <n> | cia402 speed <rpm> | cia402 torque <A> | cia402 status\r\n"
+            "  ecat <same-as-cia402>\r\n");
         return;
     }
 
@@ -673,22 +873,22 @@ static void CDC_HandleLine(const char *line)
         CDC_HandleCanLikeCommand(0x01U, ParamId_GetCanNodeId(), NULL, 0U);
         return;
     }
-    if (strcmp(cmd, "speedmode") == 0)
+    if ((strcmp(cmd, "speedmode") == 0) || (strcmp(cmd, "speedmodel") == 0))
     {
         CDC_HandleCanLikeCommand(0x03U, ParamId_GetCanNodeId(), NULL, 0U);
         return;
     }
-    if (strcmp(cmd, "posmode") == 0)
+    if ((strcmp(cmd, "posmode") == 0) || (strcmp(cmd, "posimodel") == 0))
     {
         CDC_HandleCanLikeCommand(0x04U, ParamId_GetCanNodeId(), NULL, 0U);
         return;
     }
-    if (strcmp(cmd, "vfmode") == 0)
+    if ((strcmp(cmd, "vfmode") == 0) || (strcmp(cmd, "vfmodel") == 0))
     {
         CDC_HandleCanLikeCommand(0x05U, ParamId_GetCanNodeId(), NULL, 0U);
         return;
     }
-    if (strcmp(cmd, "speed") == 0)
+    if ((strcmp(cmd, "speed") == 0) || (strcmp(cmd, "sc") == 0))
     {
         float v;
         if (CDC_ParseFloat(arg1, &v))
@@ -702,7 +902,7 @@ static void CDC_HandleLine(const char *line)
         }
         return;
     }
-    if (strcmp(cmd, "kp") == 0)
+    if ((strcmp(cmd, "kp") == 0) || (strcmp(cmd, "sp") == 0))
     {
         float v;
         if (CDC_ParseFloat(arg1, &v))
@@ -716,7 +916,7 @@ static void CDC_HandleLine(const char *line)
         }
         return;
     }
-    if (strcmp(cmd, "ki") == 0)
+    if ((strcmp(cmd, "ki") == 0) || (strcmp(cmd, "si") == 0))
     {
         float v;
         if (CDC_ParseFloat(arg1, &v))
@@ -786,6 +986,20 @@ static void CDC_HandleLine(const char *line)
         CDC_HandleCanLikeCommand(0x0BU, ParamId_GetCanNodeId(), NULL, 0U);
         return;
     }
+    if ((strcmp(cmd, "paramstart") == 0) || (strcmp(cmd, "measureparams") == 0))
+    {
+        bytes[0] = 1U;
+        CDC_HandleCanLikeCommand(0x0AU, ParamId_GetCanNodeId(), bytes, 1U);
+        return;
+    }
+    if ((strcmp(cmd, "params") == 0) || (strcmp(cmd, "paramget") == 0))
+    {
+        if (CDC_SendParamResultLine("PARAM") != USBD_OK)
+        {
+            s_param_auto_report_pending = 1U;
+        }
+        return;
+    }
     if (strcmp(cmd, "can") == 0)
     {
         if ((CDC_ParseU8(arg1, &func)) && (CDC_ParseU8(arg2, &node)))
@@ -810,6 +1024,79 @@ static void CDC_HandleLine(const char *line)
         return;
     }
 
+    if ((strcmp(cmd, "cia402") == 0) || (strcmp(cmd, "ecat") == 0))
+    {
+        if ((arg1 == NULL) || (strcmp(arg1, "status") == 0))
+        {
+            CDC_SendCia402StatusLine("CIA402");
+            return;
+        }
+
+        if (strcmp(arg1, "cw") == 0)
+        {
+            uint16_t controlword;
+            if (CDC_ParseU16(arg2, &controlword))
+            {
+                bytes[0] = (uint8_t)(controlword & 0xFFU);
+                bytes[1] = (uint8_t)((controlword >> 8) & 0xFFU);
+                CDC_HandleCanLikeCommand(0x10U, ParamId_GetCanNodeId(), bytes, 2U);
+            }
+            else
+            {
+                CDC_SendString("DBG ERR bad cia402 cw\r\n");
+            }
+            return;
+        }
+
+        if (strcmp(arg1, "mode") == 0)
+        {
+            if (CDC_ParseU8(arg2, &bytes[0]))
+            {
+                CDC_HandleCanLikeCommand(0x11U, ParamId_GetCanNodeId(), bytes, 1U);
+            }
+            else
+            {
+                CDC_SendString("DBG ERR bad cia402 mode\r\n");
+            }
+            return;
+        }
+
+        if (strcmp(arg1, "speed") == 0)
+        {
+            float v;
+            if (CDC_ParseFloat(arg2, &v))
+            {
+                memcpy(bytes, &v, 4U);
+                CDC_HandleCanLikeCommand(0x12U, ParamId_GetCanNodeId(), bytes, 4U);
+            }
+            else
+            {
+                CDC_SendString("DBG ERR bad cia402 speed\r\n");
+            }
+            return;
+        }
+
+        if (strcmp(arg1, "torque") == 0)
+        {
+            float v;
+            if (CDC_ParseFloat(arg2, &v))
+            {
+                int16_t iq_mA = (int16_t)(v * 1000.0f);
+                bytes[0] = (uint8_t)(iq_mA & 0xFF);
+                bytes[1] = (uint8_t)((iq_mA >> 8) & 0xFF);
+                CDC_HandleCanLikeCommand(0x13U, ParamId_GetCanNodeId(), bytes, 2U);
+            }
+            else
+            {
+                CDC_SendString("DBG ERR bad cia402 torque\r\n");
+            }
+            return;
+        }
+
+        CDC_SendString("DBG ERR bad cia402 args\r\n");
+        return;
+    }
+
     CDC_SendString("DBG ERR unknown command\r\n");
 }
 
@@ -824,10 +1111,20 @@ void CDC_Debug_Service(void)
         s_cdc_rx.ready = 0U;
     }
 
+    if ((s_param_auto_report_pending != 0U) && (s_cdc_tx_busy == 0U))
+    {
+        if (CDC_SendParamResultLine("PARAM") == USBD_OK)
+        {
+            s_param_auto_report_pending = 0U;
+        }
+    }
+
     if ((s_cdc_telem.valid != 0U) && ((HAL_GetTick() - s_last_telem_tx_ms) >= CDC_TELEM_PERIOD_MS))
     {
-        CDC_SendTelemetryLine();
-        s_last_telem_tx_ms = HAL_GetTick();
+        if (CDC_SendTelemetryLine() == USBD_OK)
+        {
+            s_last_telem_tx_ms = HAL_GetTick();
+        }
     }
 }
 

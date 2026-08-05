@@ -76,6 +76,11 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
   if(pcdHandle->Instance==USB)
   {
   /* USER CODE BEGIN USB_MspInit 0 */
+  /*
+   * PA11/PA12 are fixed USB FS pins on this MCU. Do not force PA12 low:
+   * doing so breaks D+ pull-up and prevents USB device enumeration.
+   */
+#if 0
 	__HAL_RCC_GPIOA_CLK_ENABLE();                   // 使能GPIOA端口
 	GPIO_InitTypeDef GPIO_InitStruct = {0};         // 声明结构体; 如果与文中位置相同，这行可不写
 	GPIO_InitStruct.Pin = GPIO_PIN_12;              // 引脚PA12, 即D+
@@ -84,6 +89,7 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
 	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;    // 引脚反转速度
 	HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);         // 初始化
 	HAL_Delay(5);                                   // 持续片刻
+#endif
   /* USER CODE END USB_MspInit 0 */
 
   /** Initializes the peripherals clocks

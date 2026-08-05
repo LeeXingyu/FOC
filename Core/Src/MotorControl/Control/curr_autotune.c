@@ -1299,17 +1299,17 @@ void CurrAutoTune_Start(void)
     g_axis.posCtrl.bCalibFlag = false;
     g_axis.posCtrl.uCalibCount = 0U;
 
-    printf("[AUTOTUNE] start: PWM=%lu Hz, IdBias=%.3f A, "
-           "RsTarget=%.3f A, LdInject=%lu Hz, LqInject=%lu Hz, "
-           "IppTarget=%.3f A\n",
-           (unsigned long)PWM_FREQUENCY,
-           g_rs_ident.idTargetA,
-           AUTOTUNE_RS_TARGET_CURRENT_A,
-           (unsigned long)(PWM_FREQUENCY /
-               (2U * AUTOTUNE_LD_INJECT_HALF_TICKS)),
-            (unsigned long)(PWM_FREQUENCY /
-                (2U * AUTOTUNE_LQ_INJECT_HALF_TICKS)),
-            AUTOTUNE_TARGET_CURRENT_PP_A);
+//    printf("[AUTOTUNE] start: PWM=%lu Hz, IdBias=%.3f A, "
+//           "RsTarget=%.3f A, LdInject=%lu Hz, LqInject=%lu Hz, "
+//           "IppTarget=%.3f A\n",
+//           (unsigned long)PWM_FREQUENCY,
+//           g_rs_ident.idTargetA,
+//           AUTOTUNE_RS_TARGET_CURRENT_A,
+//           (unsigned long)(PWM_FREQUENCY /
+//               (2U * AUTOTUNE_LD_INJECT_HALF_TICKS)),
+//            (unsigned long)(PWM_FREQUENCY /
+//                (2U * AUTOTUNE_LQ_INJECT_HALF_TICKS)),
+//            AUTOTUNE_TARGET_CURRENT_PP_A);
 }
 
 void CurrAutoTune_Abort(void)

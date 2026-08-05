@@ -83,7 +83,6 @@ void Tem_Task(void *argument)
 {
   (void)argument;
 
-  uint8_t comm_id_locked = 0U;
   static float s_angle_cont_deg = 0.0f;
   static float s_prev_angle_deg = 0.0f;
   static uint8_t s_prev_angle_valid = 0U;
@@ -102,6 +101,8 @@ void Tem_Task(void *argument)
     telem.axis_error = (uint8_t)g_axis.error;
     telem.control_mode = (uint8_t)g_axis.enCtrlMode;
     telem.param_state = (uint8_t)MC_Calib_GetParamState();
+    telem.cia402_statusword = MC_Get_Cia402_Statusword();
+    telem.cia402_mode = (uint8_t)g_axis.enCtrlMode;
     telem.position_deg = Get_Encoder_AngleDeg(ENC_ID_MOTOR);
     if (s_prev_angle_valid == 0U)
     {
@@ -149,6 +150,7 @@ void Tem_Task(void *argument)
     }
     telem.speed_meas_pu = FIXP30_toF(g_axis.speedCtrl.speedMeas_pu);
     telem.speed_error_pu = FIXP30_toF(g_axis.speedCtrl.speedRefRamp_pu - g_axis.speedCtrl.speedMeas_pu);
+    telem.speed_ref_rpm = (FIXP30_toF(g_axis.speedCtrl.speedRef_pu) * FREQUENCY_SCALE * 60.0f) / (float)MC_Get_Pole_Pairs();
     telem.speed_meas_rpm = (telem.speed_meas_pu * FREQUENCY_SCALE * 60.0f) / (float)MC_Get_Pole_Pairs();
     telem.speed_error_rpm = (telem.speed_error_pu * FREQUENCY_SCALE * 60.0f) / (float)MC_Get_Pole_Pairs();
     telem.speed_rpm = telem.speed_meas_rpm;
@@ -156,20 +158,9 @@ void Tem_Task(void *argument)
     telem.current_q_raw_a = MotorControl_GetIqRawDisplayA();
     telem.current_q_a = MotorControl_GetIqFilteredDisplayA();
     telem.current_ref_q_a = FIXP30_toF(g_axis.currCtrl.refIdq.Q) * CURRENT_SCALE;
+    telem.torque_ref_a = FIXP30_toF(g_axis.currCtrl.refIdq.Q) * CURRENT_SCALE;
+    telem.torque_meas_a = MotorControl_GetIqFilteredDisplayA();
     CDC_Debug_SetTelemetry(&telem);
-
-    if (comm_id_locked == 0U)
-    {
-      if (g_system_comm_mode == COMM_PROTO_CDC)
-      {
-        /* keep CDC-only mode */
-      }
-      else
-      {
-        g_system_comm_mode = (g_adc_Rule_ID_Tem.raw_COMM_ID == 1U) ? COMM_PROTO_CAN : COMM_PROTO_ETHERCAT;
-      }
-      comm_id_locked = 1U;
-    }
 
     osDelay(5);
   }
