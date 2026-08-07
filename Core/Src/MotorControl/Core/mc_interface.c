@@ -30,7 +30,14 @@ static uint16_t s_cia402_controlword = 0U;
 static int8_t s_cia402_mode = CIA402_MODE_PROFILE_VELOCITY;
 static int32_t s_cia402_target_velocity = 0;
 static int16_t s_cia402_target_torque = 0;
+static uint32_t s_cia402_profile_velocity = 0U;
+static uint32_t s_cia402_profile_acceleration = 0U;
+static uint32_t s_cia402_profile_deceleration = 0U;
+static uint32_t s_cia402_following_error_window = 0U;
+static uint16_t s_cia402_following_error_time = 0U;
+static int32_t s_cia402_following_error_actual = 0;
 
+/* CiA 402 state machine sits on top of the FOC motor state. */
 static bool MC_Cia402_IsAxisBusy(void)
 {
 	return (g_axis.state == AXIS_STATE_OFFSET_CALIB) ||
@@ -366,6 +373,12 @@ void MC_Cia402_ResetState(void)
 	s_cia402_mode = CIA402_MODE_PROFILE_VELOCITY;
 	s_cia402_target_velocity = 0;
 	s_cia402_target_torque = 0;
+	s_cia402_profile_velocity = 0U;
+	s_cia402_profile_acceleration = 0U;
+	s_cia402_profile_deceleration = 0U;
+	s_cia402_following_error_window = 0U;
+	s_cia402_following_error_time = 0U;
+	s_cia402_following_error_actual = 0;
 	(void)MC_Stop_Motor();
 	MC_Set_Control_Mode(CTRL_MODE_SPEED);
 }
@@ -470,23 +483,35 @@ bool MC_Cia402_ReadObject(uint16_t index, uint8_t subIndex,
 {
 	int32_t actualVelocity;
 
-	if ((value == NULL) || (size == NULL) || (subIndex != 0U))
+	if ((value == NULL) || (size == NULL))
 	{
 		return false;
 	}
 	switch (index)
 	{
 		case 0x1001U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			value[0] = (g_axis.error == AXIS_ERROR_NONE) ? 0U : 1U;
 			*size = 1U;
 			return true;
 		case 0x6040U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			value[0] = (uint8_t)s_cia402_controlword;
 			value[1] = (uint8_t)(s_cia402_controlword >> 8);
 			*size = 2U;
 			return true;
 		case 0x6041U:
 		{
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			uint16_t statusword = MC_Get_Cia402_Statusword();
 			value[0] = (uint8_t)statusword;
 			value[1] = (uint8_t)(statusword >> 8);
@@ -495,14 +520,97 @@ bool MC_Cia402_ReadObject(uint16_t index, uint8_t subIndex,
 		}
 		case 0x6060U:
 		case 0x6061U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			value[0] = (uint8_t)s_cia402_mode;
 			*size = 1U;
 			return true;
 		case 0x60FFU:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			(void)memcpy(value, &s_cia402_target_velocity, 4U);
 			*size = 4U;
 			return true;
+		case 0x6072U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			(void)memcpy(value, &s_cia402_target_torque, 2U);
+			*size = 2U;
+			return true;
+		case 0x6081U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			(void)memcpy(value, &s_cia402_profile_velocity, 4U);
+			*size = 4U;
+			return true;
+		case 0x6083U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			(void)memcpy(value, &s_cia402_profile_acceleration, 4U);
+			*size = 4U;
+			return true;
+		case 0x6084U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			(void)memcpy(value, &s_cia402_profile_deceleration, 4U);
+			*size = 4U;
+			return true;
+		case 0x6065U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			(void)memcpy(value, &s_cia402_following_error_window, 4U);
+			*size = 4U;
+			return true;
+		case 0x6066U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			(void)memcpy(value, &s_cia402_following_error_time, 2U);
+			*size = 2U;
+			return true;
+		case 0x60F4U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			if ((s_cia402_mode == CIA402_MODE_PROFILE_POSITION) ||
+				(s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_POSITION))
+			{
+				s_cia402_following_error_actual =
+					(int32_t)g_axis.posCtrl.fPosRef -
+					(int32_t)(g_axis.posCtrl.iAbsRawPos - g_axis.posCtrl.iZeroAngle);
+			}
+			else
+			{
+				uint8_t polePairs = MC_Get_Pole_Pairs();
+				int32_t actualVelocityNow = (int32_t)(FIXP30_toF(g_axis.speedCtrl.speedMeas_pu) *
+					FREQUENCY_SCALE * 60.0f /
+					(float)((polePairs == 0U) ? 1U : polePairs));
+				s_cia402_following_error_actual = s_cia402_target_velocity - actualVelocityNow;
+			}
+			(void)memcpy(value, &s_cia402_following_error_actual, 4U);
+			*size = 4U;
+			return true;
 		case 0x606CU:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			{
 				uint8_t polePairs = MC_Get_Pole_Pairs();
 				actualVelocity = (int32_t)(FIXP30_toF(g_axis.speedCtrl.speedMeas_pu) *
@@ -514,6 +622,10 @@ bool MC_Cia402_ReadObject(uint16_t index, uint8_t subIndex,
 			return true;
 		case 0x607AU:
 		{
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			int32_t targetPosition = (int32_t)g_axis.posCtrl.fPosRef;
 			(void)memcpy(value, &targetPosition, 4U);
 			*size = 4U;
@@ -521,6 +633,10 @@ bool MC_Cia402_ReadObject(uint16_t index, uint8_t subIndex,
 		}
 		case 0x6064U:
 		{
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			int32_t actualPosition = (int32_t)
 				(g_axis.posCtrl.iAbsRawPos - g_axis.posCtrl.iZeroAngle);
 			(void)memcpy(value, &actualPosition, 4U);
@@ -528,7 +644,7 @@ bool MC_Cia402_ReadObject(uint16_t index, uint8_t subIndex,
 			return true;
 		}
 		default:
-			return false;
+			return MC_Cia402Ext_ReadObject(index, subIndex, value, size);
 	}
 }
 
@@ -539,13 +655,17 @@ bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
 	int32_t targetVelocity;
 	int16_t targetTorque;
 
-	if ((value == NULL) || (subIndex != 0U))
+	if (value == NULL)
 	{
 		return false;
 	}
 	switch (index)
 	{
 		case 0x6040U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			if (size != 2U)
 			{
 				return false;
@@ -553,6 +673,10 @@ bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
 			return MC_Apply_Cia402_Controlword((uint16_t)value[0] |
 				((uint16_t)value[1] << 8)) == MC_SUCCESS;
 		case 0x6060U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			if (size != 1U)
 			{
 				return false;
@@ -584,6 +708,10 @@ bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
 			}
 			return true;
 		case 0x60FFU:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			if (size != 4U)
 			{
 				return false;
@@ -591,8 +719,13 @@ bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
 			(void)memcpy(&targetVelocity, value, 4U);
 			s_cia402_target_velocity = targetVelocity;
 			MC_Set_Speed_Reference((float)targetVelocity);
+			s_cia402_following_error_actual = 0;
 			return true;
 		case 0x6071U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			if (size != 2U)
 			{
 				return false;
@@ -600,7 +733,79 @@ bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
 			(void)memcpy(&targetTorque, value, 2U);
 			s_cia402_target_torque = targetTorque;
 			return MC_Set_Torque_Reference((float)targetTorque / 1000.0f) == MC_SUCCESS;
+		case 0x6072U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			if (size != 2U)
+			{
+				return false;
+			}
+			(void)memcpy(&targetTorque, value, 2U);
+			s_cia402_target_torque = targetTorque;
+			return true;
+		case 0x6081U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			if (size != 4U)
+			{
+				return false;
+			}
+			(void)memcpy(&s_cia402_profile_velocity, value, 4U);
+			return true;
+		case 0x6083U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			if (size != 4U)
+			{
+				return false;
+			}
+			(void)memcpy(&s_cia402_profile_acceleration, value, 4U);
+			MC_Set_Speed_Ramp((float)s_cia402_profile_acceleration);
+			return true;
+		case 0x6084U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			if (size != 4U)
+			{
+				return false;
+			}
+			(void)memcpy(&s_cia402_profile_deceleration, value, 4U);
+			return true;
+		case 0x6065U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			if (size != 4U)
+			{
+				return false;
+			}
+			(void)memcpy(&s_cia402_following_error_window, value, 4U);
+			return true;
+		case 0x6066U:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
+			if (size != 2U)
+			{
+				return false;
+			}
+			(void)memcpy(&s_cia402_following_error_time, value, 2U);
+			return true;
 		case 0x607AU:
+			if (subIndex != 0U)
+			{
+				return false;
+			}
 			if (size != 4U)
 			{
 				return false;
@@ -612,7 +817,7 @@ bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
 			}
 			return true;
 		default:
-			return false;
+			return MC_Cia402Ext_WriteObject(index, subIndex, value, size);
 	}
 }
 

@@ -19,6 +19,10 @@ static ParamIdState_t s_param_state_prev = PARAM_ID_STATE_IDLE;
 #define CANOPEN_SDO_MAX_DATA          4U
 #define CANOPEN_SDO_SEGMENT_BUFFER    255U
 
+/* -------------------------------------------------------------------------- */
+/* Legacy compatibility path                                                  */
+/* -------------------------------------------------------------------------- */
+
 typedef enum
 {
     CANOPEN_NMT_INITIALIZING = 0U,
@@ -32,6 +36,8 @@ static uint16_t s_canopen_heartbeat_ms = CANOPEN_HEARTBEAT_DEFAULT_MS;
 static uint32_t s_canopen_heartbeat_elapsed_ms = 0U;
 static uint32_t s_canopen_tpdo_elapsed_ms = 0U;
 static uint32_t s_canopen_tpdo2_elapsed_ms = 0U;
+static uint32_t s_canopen_tpdo3_elapsed_ms = 0U;
+static uint32_t s_canopen_tpdo4_elapsed_ms = 0U;
 static uint8_t s_canopen_rpdo1_map_count = 2U;
 static uint8_t s_canopen_tpdo1_map_count = 4U;
 static uint8_t s_canopen_tpdo1_transmission = 0xFFU;
@@ -49,6 +55,10 @@ static uint8_t s_canopen_rpdo2_transmission = 0xFFU;
 static uint8_t s_canopen_tpdo2_enabled = 1U;
 static uint16_t s_canopen_tpdo2_inhibit_ms = 0U;
 static uint16_t s_canopen_tpdo2_event_ms = CANOPEN_TPDO_PERIOD_MS;
+static uint8_t s_canopen_tpdo34_enabled[2] = {0U, 0U};
+static uint16_t s_canopen_tpdo34_inhibit_ms[2] = {0U, 0U};
+static uint16_t s_canopen_tpdo34_event_ms[2] = {CANOPEN_TPDO_PERIOD_MS,
+                                                 CANOPEN_TPDO_PERIOD_MS};
 static uint8_t s_canopen_rpdo2_map_count = 2U;
 static uint32_t s_canopen_rpdo2_mapping[2] = {0x60600008UL, 0x60710010UL};
 static uint32_t s_canopen_tpdo2_mapping[2] = {0x60640020UL, 0x607A0020UL};
@@ -72,6 +82,11 @@ typedef struct
 
 static CanOpenSdoSession_t s_canopen_sdo_upload;
 static CanOpenSdoSession_t s_canopen_sdo_download;
+
+static bool CanOpen_ReadObject(uint16_t index, uint8_t subIndex,
+                               uint8_t *value, uint8_t *size);
+static bool CanOpen_WriteObject(uint16_t index, uint8_t subIndex,
+                                const uint8_t *value, uint8_t size);
 
 static void CanOpen_Send(uint16_t cobId, const uint8_t *data, uint8_t len)
 {
@@ -177,6 +192,238 @@ static void CanOpen_SendTpdo2(void)
                  payload, offset);
 }
 
+static bool CanOpen_ReadObjectScalar(uint16_t index, uint8_t subIndex,
+                                     uint8_t *value, uint8_t expectedSize)
+{
+    uint8_t size = 0U;
+
+    if (!CanOpen_ReadObject(index, subIndex, value, &size))
+    {
+        return false;
+    }
+
+    return (size == expectedSize);
+}
+
+static bool CanOpen_GetDynamicPdoComm(uint16_t commIndex, uint32_t *cobId,
+                                      uint8_t *transmissionType,
+                                      uint16_t *inhibitTime,
+                                      uint16_t *eventTime,
+                                      uint8_t *enabled)
+{
+    uint8_t value[4];
+
+    if ((cobId == NULL) || (transmissionType == NULL) ||
+        (inhibitTime == NULL) || (eventTime == NULL) ||
+        (enabled == NULL))
+    {
+        return false;
+    }
+
+    if (!CanOpen_ReadObjectScalar(commIndex, 1U, value, 4U))
+    {
+        return false;
+    }
+    (void)memcpy(cobId, value, 4U);
+
+    if (!CanOpen_ReadObjectScalar(commIndex, 2U, value, 1U))
+    {
+        return false;
+    }
+    *transmissionType = value[0];
+
+    *inhibitTime = 0U;
+    *eventTime = CANOPEN_TPDO_PERIOD_MS;
+    if ((commIndex == 0x1802U) || (commIndex == 0x1803U))
+    {
+        if (!CanOpen_ReadObjectScalar(commIndex, 3U, value, 2U))
+        {
+            return false;
+        }
+        *inhibitTime = (uint16_t)value[0] | ((uint16_t)value[1] << 8);
+
+        if (!CanOpen_ReadObjectScalar(commIndex, 5U, value, 2U))
+        {
+            return false;
+        }
+        *eventTime = (uint16_t)value[0] | ((uint16_t)value[1] << 8);
+    }
+
+    *enabled = ((*cobId & 0x80000000UL) == 0U) ? 1U : 0U;
+    return true;
+}
+
+static bool CanOpen_GetDynamicPdoMap(uint16_t mapIndex, uint32_t *mapping,
+                                     uint8_t *mapCount, uint8_t maxEntries)
+{
+    uint8_t value[4];
+    uint8_t i;
+
+    if ((mapping == NULL) || (mapCount == NULL))
+    {
+        return false;
+    }
+
+    if (!CanOpen_ReadObjectScalar(mapIndex, 0U, value, 1U))
+    {
+        return false;
+    }
+
+    if (value[0] > maxEntries)
+    {
+        return false;
+    }
+    *mapCount = value[0];
+
+    for (i = 0U; i < maxEntries; i++)
+    {
+        mapping[i] = 0U;
+    }
+    for (i = 0U; i < *mapCount; i++)
+    {
+        if (!CanOpen_ReadObjectScalar(mapIndex, (uint8_t)(i + 1U), value, 4U))
+        {
+            return false;
+        }
+        (void)memcpy(&mapping[i], value, 4U);
+    }
+
+    return true;
+}
+
+static bool CanOpen_SendMappedPdo(uint32_t cobId, const uint32_t *mapping,
+                                  uint8_t mapCount)
+{
+    uint8_t payload[8] = {0};
+    uint8_t offset = 0U;
+    uint8_t i;
+
+    if ((mapping == NULL) || ((cobId & 0x80000000UL) != 0U))
+    {
+        return false;
+    }
+
+    for (i = 0U; i < mapCount; i++)
+    {
+        uint16_t index = (uint16_t)(mapping[i] >> 16);
+        uint8_t subIndex = (uint8_t)(mapping[i] >> 8);
+        uint8_t bits = (uint8_t)mapping[i];
+        uint8_t value[4] = {0};
+        uint8_t valueSize = 0U;
+
+        if ((bits == 0U) || ((bits % 8U) != 0U) ||
+            !MC_Cia402_ReadObject(index, subIndex, value, &valueSize) ||
+            (valueSize != (uint8_t)(bits / 8U)) ||
+            ((uint8_t)(offset + valueSize) > sizeof(payload)))
+        {
+            return false;
+        }
+
+        (void)memcpy(&payload[offset], value, valueSize);
+        offset = (uint8_t)(offset + valueSize);
+    }
+
+    CanOpen_Send((uint16_t)(cobId & 0x7FFU), payload, offset);
+    return true;
+}
+
+static bool CanOpen_HandleMappedRpdo(const uint32_t *mapping, uint8_t mapCount,
+                                     const uint8_t *data, uint8_t len)
+{
+    uint8_t offset = 0U;
+    uint8_t i;
+
+    if (mapping == NULL)
+    {
+        return false;
+    }
+
+    for (i = 0U; i < mapCount; i++)
+    {
+        uint16_t index = (uint16_t)(mapping[i] >> 16);
+        uint8_t subIndex = (uint8_t)(mapping[i] >> 8);
+        uint8_t bits = (uint8_t)mapping[i];
+        uint8_t valueSize;
+
+        if ((bits == 0U) || ((bits % 8U) != 0U))
+        {
+            return false;
+        }
+
+        valueSize = (uint8_t)(bits / 8U);
+        if ((uint8_t)(offset + valueSize) > len)
+        {
+            return false;
+        }
+
+        if (!CanOpen_WriteObject(index, subIndex, &data[offset], valueSize))
+        {
+            return false;
+        }
+
+        offset = (uint8_t)(offset + valueSize);
+    }
+
+    return true;
+}
+
+static bool CanOpen_SendDynamicTpdo(uint16_t commIndex, uint16_t mapIndex)
+{
+    uint32_t cobId;
+    uint32_t mapping[8];
+    uint16_t inhibitTime;
+    uint16_t eventTime;
+    uint8_t transmissionType;
+    uint8_t enabled;
+    uint8_t mapCount;
+
+    (void)inhibitTime;
+    (void)eventTime;
+    (void)transmissionType;
+
+    if (!CanOpen_GetDynamicPdoComm(commIndex, &cobId, &transmissionType,
+                                   &inhibitTime, &eventTime, &enabled) ||
+        !CanOpen_GetDynamicPdoMap(mapIndex, mapping, &mapCount, 8U) ||
+        (enabled == 0U) ||
+        (mapCount == 0U))
+    {
+        return false;
+    }
+
+    return CanOpen_SendMappedPdo(cobId, mapping, mapCount);
+}
+
+static bool CanOpen_HandleDynamicRpdo(uint16_t commIndex, uint16_t mapIndex,
+                                      const uint8_t *data, uint8_t len)
+{
+    uint32_t cobId;
+    uint32_t mapping[8];
+    uint16_t inhibitTime;
+    uint16_t eventTime;
+    uint8_t transmissionType;
+    uint8_t enabled;
+    uint8_t mapCount;
+
+    if (!CanOpen_GetDynamicPdoComm(commIndex, &cobId, &transmissionType,
+                                   &inhibitTime, &eventTime, &enabled) ||
+        !CanOpen_GetDynamicPdoMap(mapIndex, mapping, &mapCount, 8U) ||
+        (mapCount == 0U))
+    {
+        return false;
+    }
+
+    (void)inhibitTime;
+    (void)eventTime;
+    (void)transmissionType;
+
+    if (enabled == 0U)
+    {
+        return false;
+    }
+
+    return CanOpen_HandleMappedRpdo(mapping, mapCount, data, len);
+}
+
 static void CanOpen_SendSdoAbort(uint8_t nodeId, uint16_t index,
                                  uint8_t subIndex, uint32_t abortCode)
 {
@@ -191,11 +438,70 @@ static void CanOpen_SendSdoAbort(uint8_t nodeId, uint16_t index,
 
 static uint32_t CanOpen_GetWriteAbortCode(uint16_t index)
 {
-    return ((index == 0x6040U) ||
+    return ((index == 0x1017U) ||
+            (index == 0x1200U) ||
+            (index == 0x1400U) ||
+            (index == 0x1401U) ||
+            (index == 0x1402U) ||
+            (index == 0x1403U) ||
+            (index == 0x1600U) ||
+            (index == 0x1601U) ||
+            (index == 0x1602U) ||
+            (index == 0x1603U) ||
+            (index == 0x1800U) ||
+            (index == 0x1801U) ||
+            (index == 0x1802U) ||
+            (index == 0x1803U) ||
+            (index == 0x1A00U) ||
+            (index == 0x1A01U) ||
+            (index == 0x1A02U) ||
+            (index == 0x1A03U) ||
+            (index == 0x6040U) ||
             (index == 0x6060U) ||
+            (index == 0x6065U) ||
+            (index == 0x6066U) ||
+            (index == 0x6067U) ||
+            (index == 0x6068U) ||
+            (index == 0x606AU) ||
             (index == 0x60FFU) ||
             (index == 0x6071U) ||
-            (index == 0x607AU)) ?
+            (index == 0x6072U) ||
+            (index == 0x6075U) ||
+            (index == 0x6076U) ||
+            (index == 0x607AU) ||
+            (index == 0x607BU) ||
+            (index == 0x607CU) ||
+            (index == 0x607DU) ||
+            (index == 0x607EU) ||
+            (index == 0x607FU) ||
+            (index == 0x6080U) ||
+            (index == 0x6081U) ||
+            (index == 0x6082U) ||
+            (index == 0x6083U) ||
+            (index == 0x6084U) ||
+            (index == 0x6085U) ||
+            (index == 0x6086U) ||
+            (index == 0x6087U) ||
+            (index == 0x608FU) ||
+            (index == 0x6090U) ||
+            (index == 0x6091U) ||
+            (index == 0x6092U) ||
+            (index == 0x6093U) ||
+            (index == 0x6094U) ||
+            (index == 0x6095U) ||
+            (index == 0x6098U) ||
+            (index == 0x6099U) ||
+            (index == 0x609AU) ||
+            (index == 0x60B8U) ||
+            (index == 0x60C0U) ||
+            (index == 0x60C1U) ||
+            (index == 0x60C2U) ||
+            (index == 0x60C4U) ||
+            (index == 0x60C5U) ||
+            (index == 0x60C6U) ||
+            (index == 0x60E0U) ||
+            (index == 0x60E1U) ||
+            (index == 0x60FEU)) ?
            0x06090030UL : 0x06010002UL;
 }
 
@@ -211,13 +517,45 @@ static bool CanOpen_GetWritableObjectSize(uint16_t index, uint8_t subIndex,
     {
         case 0x6040U:
         case 0x6071U:
+        case 0x6072U:
+        case 0x6066U:
+        case 0x606AU:
+        case 0x6086U:
+        case 0x60B8U:
+        case 0x60E0U:
+        case 0x60E1U:
             if (subIndex == 0U)
             {
                 *size = 2U;
                 return true;
             }
             break;
+        case 0x6065U:
+        case 0x6067U:
+        case 0x6075U:
+        case 0x6076U:
+        case 0x607AU:
+        case 0x6081U:
+        case 0x607CU:
+        case 0x607FU:
+        case 0x6080U:
+        case 0x6082U:
+        case 0x6083U:
+        case 0x6084U:
+        case 0x6085U:
+        case 0x6087U:
+        case 0x609AU:
+        case 0x60C5U:
+        case 0x60C6U:
+            if (subIndex == 0U)
+            {
+                *size = 4U;
+                return true;
+            }
+            break;
         case 0x6060U:
+        case 0x607EU:
+        case 0x6098U:
             if (subIndex == 0U)
             {
                 *size = 1U;
@@ -225,8 +563,57 @@ static bool CanOpen_GetWritableObjectSize(uint16_t index, uint8_t subIndex,
             }
             break;
         case 0x60FFU:
-        case 0x607AU:
             if (subIndex == 0U)
+            {
+                *size = 4U;
+                return true;
+            }
+            break;
+        case 0x607BU:
+        case 0x607DU:
+        case 0x608FU:
+        case 0x6090U:
+        case 0x6091U:
+        case 0x6092U:
+        case 0x6093U:
+        case 0x6094U:
+        case 0x6095U:
+        case 0x6099U:
+            if ((subIndex >= 1U) && (subIndex <= 2U))
+            {
+                *size = 4U;
+                return true;
+            }
+            break;
+        case 0x60C0U:
+            if (subIndex == 0U)
+            {
+                *size = 2U;
+                return true;
+            }
+            break;
+        case 0x60C1U:
+        case 0x60C4U:
+            if (subIndex == 0U)
+            {
+                *size = 1U;
+                return true;
+            }
+            if ((subIndex >= 1U) && (subIndex <= 4U))
+            {
+                *size = 4U;
+                return true;
+            }
+            break;
+        case 0x60C2U:
+            if ((subIndex == 1U) || (subIndex == 2U))
+            {
+                *size = 1U;
+                return true;
+            }
+            break;
+        case 0x60FEU:
+            if ((subIndex == 1U) || (subIndex == 2U))
             {
                 *size = 4U;
                 return true;
@@ -239,10 +626,26 @@ static bool CanOpen_GetWritableObjectSize(uint16_t index, uint8_t subIndex,
                 return true;
             }
             break;
+        case 0x1200U:
+            if ((subIndex == 1U) || (subIndex == 2U))
+            {
+                *size = 4U;
+                return true;
+            }
+            if (subIndex == 3U)
+            {
+                *size = 1U;
+                return true;
+            }
+            break;
         case 0x1400U:
         case 0x1401U:
+        case 0x1402U:
+        case 0x1403U:
         case 0x1800U:
         case 0x1801U:
+        case 0x1802U:
+        case 0x1803U:
             if (subIndex == 1U)
             {
                 *size = 4U;
@@ -253,7 +656,8 @@ static bool CanOpen_GetWritableObjectSize(uint16_t index, uint8_t subIndex,
                 *size = 1U;
                 return true;
             }
-            if ((index == 0x1800U || index == 0x1801U) &&
+            if (((index == 0x1800U) || (index == 0x1801U) ||
+                 (index == 0x1802U) || (index == 0x1803U)) &&
                 ((subIndex == 3U) || (subIndex == 5U)))
             {
                 *size = 2U;
@@ -262,15 +666,26 @@ static bool CanOpen_GetWritableObjectSize(uint16_t index, uint8_t subIndex,
             break;
         case 0x1600U:
         case 0x1601U:
+        case 0x1602U:
+        case 0x1603U:
         case 0x1A00U:
         case 0x1A01U:
+        case 0x1A02U:
+        case 0x1A03U:
             if (subIndex == 0U)
             {
                 *size = 1U;
                 return true;
             }
             if (((index == 0x1600U) || (index == 0x1601U)) &&
-                (subIndex <= 2U))
+                (subIndex >= 1U) && (subIndex <= 2U))
+            {
+                *size = 4U;
+                return true;
+            }
+            if (((index == 0x1602U) || (index == 0x1603U) ||
+                 (index == 0x1A02U) || (index == 0x1A03U)) &&
+                (subIndex >= 1U) && (subIndex <= 8U))
             {
                 *size = 4U;
                 return true;
@@ -280,7 +695,7 @@ static bool CanOpen_GetWritableObjectSize(uint16_t index, uint8_t subIndex,
                 *size = 4U;
                 return true;
             }
-            if ((index == 0x1A01U) && (subIndex <= 2U))
+            if ((index == 0x1A01U) && (subIndex >= 1U) && (subIndex <= 2U))
             {
                 *size = 4U;
                 return true;
@@ -311,17 +726,43 @@ static bool CanOpen_IsAllowedTxCobId(uint16_t cobId)
     return true;
 #else
     uint16_t nodeId = ParamId_GetCanNodeId();
+    uint32_t dynamicCobId = 0U;
+    uint16_t inhibitTime = 0U;
+    uint16_t eventTime = 0U;
+    uint8_t transmissionType = 0U;
+    uint8_t enabled = 0U;
 
     /*
      * Strict builds expose only the CANopen producer objects.  The TPDO
      * entries are compared against their configured COB-ID so a standard
      * master may remap them through 0x1800/0x1801.
      */
-    return (cobId == (uint16_t)(0x080U + nodeId)) ||
-           (cobId == (uint16_t)(s_canopen_tpdo1_cobid & 0x7FFU)) ||
-           (cobId == (uint16_t)(s_canopen_tpdo2_cobid & 0x7FFU)) ||
-           (cobId == (uint16_t)(CANOPEN_COBID_SDO_TX_BASE + nodeId)) ||
-           (cobId == (uint16_t)(CANOPEN_COBID_HEARTBEAT_BASE + nodeId));
+    if ((cobId == (uint16_t)(0x080U + nodeId)) ||
+        (cobId == (uint16_t)(s_canopen_tpdo1_cobid & 0x7FFU)) ||
+        (cobId == (uint16_t)(s_canopen_tpdo2_cobid & 0x7FFU)) ||
+        (cobId == (uint16_t)(CANOPEN_COBID_SDO_TX_BASE + nodeId)) ||
+        (cobId == (uint16_t)(CANOPEN_COBID_HEARTBEAT_BASE + nodeId)))
+    {
+        return true;
+    }
+
+    if (CanOpen_GetDynamicPdoComm(0x1802U, &dynamicCobId, &transmissionType,
+                                  &inhibitTime, &eventTime, &enabled) &&
+        (enabled != 0U) &&
+        (cobId == (uint16_t)(dynamicCobId & 0x7FFU)))
+    {
+        return true;
+    }
+
+    if (CanOpen_GetDynamicPdoComm(0x1803U, &dynamicCobId, &transmissionType,
+                                  &inhibitTime, &eventTime, &enabled) &&
+        (enabled != 0U) &&
+        (cobId == (uint16_t)(dynamicCobId & 0x7FFU)))
+    {
+        return true;
+    }
+
+    return false;
 #endif
 }
 
@@ -376,15 +817,6 @@ static bool CanOpen_ReadObject(uint16_t index, uint8_t subIndex,
 {
     uint32_t u32;
 
-    if ((index == 0x6040U) || (index == 0x6041U) ||
-        (index == 0x6060U) || (index == 0x6061U) ||
-        (index == 0x60FFU) || (index == 0x606CU) ||
-        (index == 0x6071U) || (index == 0x607AU) ||
-        (index == 0x6064U))
-    {
-        return MC_Cia402_ReadObject(index, subIndex, value, size);
-    }
-
     if ((subIndex != 0U) &&
         (index != 0x1018U) && (index != 0x1400U) &&
         (index != 0x1401U) && (index != 0x1600U) &&
@@ -392,7 +824,7 @@ static bool CanOpen_ReadObject(uint16_t index, uint8_t subIndex,
         (index != 0x1801U) && (index != 0x1A00U) &&
         (index != 0x1A01U))
     {
-        return false;
+        return MC_Cia402_ReadObject(index, subIndex, value, size);
     }
     switch (index)
     {
@@ -653,7 +1085,7 @@ static bool CanOpen_ReadObject(uint16_t index, uint8_t subIndex,
             }
             return true;
         default:
-            return false;
+            return MC_Cia402_ReadObject(index, subIndex, value, size);
     }
 }
 
@@ -662,20 +1094,13 @@ static bool CanOpen_WriteObject(uint16_t index, uint8_t subIndex,
 {
     uint32_t cobId;
 
-    if ((index == 0x6040U) || (index == 0x6060U) ||
-        (index == 0x60FFU) || (index == 0x6071U) ||
-        (index == 0x607AU))
-    {
-        return MC_Cia402_WriteObject(index, subIndex, value, size);
-    }
-
     if ((subIndex != 0U) &&
         (index != 0x1400U) && (index != 0x1600U) &&
         (index != 0x1401U) && (index != 0x1601U) &&
         (index != 0x1800U) && (index != 0x1801U) &&
         (index != 0x1A00U) && (index != 0x1A01U))
     {
-        return false;
+        return MC_Cia402_WriteObject(index, subIndex, value, size);
     }
     switch (index)
     {
@@ -851,7 +1276,7 @@ static bool CanOpen_WriteObject(uint16_t index, uint8_t subIndex,
             }
             return false;
         default:
-            return false;
+            return MC_Cia402_WriteObject(index, subIndex, value, size);
     }
 }
 
@@ -1196,6 +1621,7 @@ static bool CanOpen_HandleRpdo2(const uint8_t *data, uint8_t len)
     return true;
 }
 
+/* Standard CANopen / CiA 402 frame entry point. */
 static bool CanOpen_HandleStandardFrame(uint16_t sid, const uint8_t *data,
                                         uint8_t len)
 {
@@ -1227,6 +1653,28 @@ static bool CanOpen_HandleStandardFrame(uint16_t sid, const uint8_t *data,
         {
             CanOpen_SendTpdo2();
         }
+        {
+            uint32_t cobId = 0U;
+            uint16_t inhibitTime = 0U;
+            uint16_t eventTime = 0U;
+            uint8_t transmissionType = 0U;
+            uint8_t enabled = 0U;
+
+            if (CanOpen_GetDynamicPdoComm(0x1802U, &cobId, &transmissionType,
+                                          &inhibitTime, &eventTime, &enabled) &&
+                (enabled != 0U) &&
+                (transmissionType >= 1U) && (transmissionType <= 240U))
+            {
+                (void)CanOpen_SendDynamicTpdo(0x1802U, 0x1A02U);
+            }
+            if (CanOpen_GetDynamicPdoComm(0x1803U, &cobId, &transmissionType,
+                                          &inhibitTime, &eventTime, &enabled) &&
+                (enabled != 0U) &&
+                (transmissionType >= 1U) && (transmissionType <= 240U))
+            {
+                (void)CanOpen_SendDynamicTpdo(0x1803U, 0x1A03U);
+            }
+        }
         return true;
     }
     if (sid == (uint16_t)(CANOPEN_COBID_SDO_RX_BASE + nodeId))
@@ -1244,6 +1692,29 @@ static bool CanOpen_HandleStandardFrame(uint16_t sid, const uint8_t *data,
         return ((s_canopen_rpdo2_cobid & 0x80000000UL) == 0U) &&
                (s_canopen_nmt_state == CANOPEN_NMT_OPERATIONAL) ?
                CanOpen_HandleRpdo2(data, len) : false;
+    }
+    if (s_canopen_nmt_state == CANOPEN_NMT_OPERATIONAL)
+    {
+        uint32_t cobId = 0U;
+        uint16_t inhibitTime = 0U;
+        uint16_t eventTime = 0U;
+        uint8_t transmissionType = 0U;
+        uint8_t enabled = 0U;
+
+        if (CanOpen_GetDynamicPdoComm(0x1402U, &cobId, &transmissionType,
+                                      &inhibitTime, &eventTime, &enabled) &&
+            (enabled != 0U) &&
+            (sid == (uint16_t)(cobId & 0x7FFU)))
+        {
+            return CanOpen_HandleDynamicRpdo(0x1402U, 0x1602U, data, len);
+        }
+        if (CanOpen_GetDynamicPdoComm(0x1403U, &cobId, &transmissionType,
+                                      &inhibitTime, &eventTime, &enabled) &&
+            (enabled != 0U) &&
+            (sid == (uint16_t)(cobId & 0x7FFU)))
+        {
+            return CanOpen_HandleDynamicRpdo(0x1403U, 0x1603U, data, len);
+        }
     }
     return false;
 }
@@ -1705,6 +2176,26 @@ static CanCmdStatus_t Can_SetNodeId(const uint8_t *data, uint8_t len, uint8_t *e
     s_canopen_tpdo1_cobid = CANOPEN_COBID_TPDO1_BASE + newNodeId;
     s_canopen_rpdo2_cobid = CANOPEN_COBID_RPDO2_BASE + newNodeId;
     s_canopen_tpdo2_cobid = CANOPEN_COBID_TPDO2_BASE + newNodeId;
+    {
+        uint32_t cobId;
+        uint8_t raw[4];
+
+        cobId = CANOPEN_COBID_RPDO3_BASE + newNodeId;
+        (void)memcpy(raw, &cobId, 4U);
+        (void)MC_Cia402_WriteObject(0x1402U, 1U, raw, 4U);
+
+        cobId = CANOPEN_COBID_RPDO4_BASE + newNodeId;
+        (void)memcpy(raw, &cobId, 4U);
+        (void)MC_Cia402_WriteObject(0x1403U, 1U, raw, 4U);
+
+        cobId = CANOPEN_COBID_TPDO3_BASE + newNodeId;
+        (void)memcpy(raw, &cobId, 4U);
+        (void)MC_Cia402_WriteObject(0x1802U, 1U, raw, 4U);
+
+        cobId = CANOPEN_COBID_TPDO4_BASE + newNodeId;
+        (void)memcpy(raw, &cobId, 4U);
+        (void)MC_Cia402_WriteObject(0x1803U, 1U, raw, 4U);
+    }
 
     *extra = newNodeId;
     return CAN_CMD_STATUS_OK;
@@ -1900,6 +2391,8 @@ void CANFD_INIT(void)
     s_canopen_heartbeat_elapsed_ms = 0U;
     s_canopen_tpdo_elapsed_ms = 0U;
     s_canopen_tpdo2_elapsed_ms = 0U;
+    s_canopen_tpdo3_elapsed_ms = 0U;
+    s_canopen_tpdo4_elapsed_ms = 0U;
     s_canopen_last_error = AXIS_ERROR_NONE;
     s_canopen_rpdo1_cobid = CANOPEN_COBID_RPDO1_BASE +
                             ParamId_GetCanNodeId();
@@ -1933,6 +2426,32 @@ void CANFD_INIT(void)
     s_canopen_tpdo2_inhibit_ms = 0U;
     s_canopen_tpdo1_event_ms = CANOPEN_TPDO_PERIOD_MS;
     s_canopen_tpdo2_event_ms = CANOPEN_TPDO_PERIOD_MS;
+    s_canopen_tpdo34_enabled[0] = 0U;
+    s_canopen_tpdo34_enabled[1] = 0U;
+    s_canopen_tpdo34_inhibit_ms[0] = 0U;
+    s_canopen_tpdo34_inhibit_ms[1] = 0U;
+    s_canopen_tpdo34_event_ms[0] = CANOPEN_TPDO_PERIOD_MS;
+    s_canopen_tpdo34_event_ms[1] = CANOPEN_TPDO_PERIOD_MS;
+    {
+        uint32_t cobId;
+        uint8_t raw[4];
+
+        cobId = CANOPEN_COBID_RPDO3_BASE + ParamId_GetCanNodeId();
+        (void)memcpy(raw, &cobId, 4U);
+        (void)MC_Cia402_WriteObject(0x1402U, 1U, raw, 4U);
+
+        cobId = CANOPEN_COBID_RPDO4_BASE + ParamId_GetCanNodeId();
+        (void)memcpy(raw, &cobId, 4U);
+        (void)MC_Cia402_WriteObject(0x1403U, 1U, raw, 4U);
+
+        cobId = CANOPEN_COBID_TPDO3_BASE + ParamId_GetCanNodeId();
+        (void)memcpy(raw, &cobId, 4U);
+        (void)MC_Cia402_WriteObject(0x1802U, 1U, raw, 4U);
+
+        cobId = CANOPEN_COBID_TPDO4_BASE + ParamId_GetCanNodeId();
+        (void)memcpy(raw, &cobId, 4U);
+        (void)MC_Cia402_WriteObject(0x1803U, 1U, raw, 4U);
+    }
     CanOpen_SendBootup();
 }
 
@@ -2123,6 +2642,54 @@ void MCP2518FD_Service1ms(void)
             {
                 s_canopen_tpdo2_elapsed_ms = 0U;
                 CanOpen_SendTpdo2();
+            }
+        }
+        s_canopen_tpdo3_elapsed_ms++;
+        s_canopen_tpdo4_elapsed_ms++;
+        {
+            uint32_t cobId = 0U;
+            uint16_t inhibitTime = 0U;
+            uint16_t eventTime = CANOPEN_TPDO_PERIOD_MS;
+            uint8_t transmissionType = 0U;
+            uint8_t enabled = 0U;
+
+            if (CanOpen_GetDynamicPdoComm(0x1802U, &cobId, &transmissionType,
+                                          &inhibitTime, &eventTime, &enabled))
+            {
+                uint16_t period = (eventTime == 0U) ? CANOPEN_TPDO_PERIOD_MS : eventTime;
+                s_canopen_tpdo34_enabled[0] = enabled;
+                s_canopen_tpdo34_inhibit_ms[0] = inhibitTime;
+                s_canopen_tpdo34_event_ms[0] = eventTime;
+                if (inhibitTime > period)
+                {
+                    period = inhibitTime;
+                }
+                if ((enabled != 0U) &&
+                    ((transmissionType == 254U) || (transmissionType == 255U)) &&
+                    (s_canopen_tpdo3_elapsed_ms >= period))
+                {
+                    s_canopen_tpdo3_elapsed_ms = 0U;
+                    (void)CanOpen_SendDynamicTpdo(0x1802U, 0x1A02U);
+                }
+            }
+            if (CanOpen_GetDynamicPdoComm(0x1803U, &cobId, &transmissionType,
+                                          &inhibitTime, &eventTime, &enabled))
+            {
+                uint16_t period = (eventTime == 0U) ? CANOPEN_TPDO_PERIOD_MS : eventTime;
+                s_canopen_tpdo34_enabled[1] = enabled;
+                s_canopen_tpdo34_inhibit_ms[1] = inhibitTime;
+                s_canopen_tpdo34_event_ms[1] = eventTime;
+                if (inhibitTime > period)
+                {
+                    period = inhibitTime;
+                }
+                if ((enabled != 0U) &&
+                    ((transmissionType == 254U) || (transmissionType == 255U)) &&
+                    (s_canopen_tpdo4_elapsed_ms >= period))
+                {
+                    s_canopen_tpdo4_elapsed_ms = 0U;
+                    (void)CanOpen_SendDynamicTpdo(0x1803U, 0x1A03U);
+                }
             }
         }
     }

@@ -93,6 +93,10 @@ bool MC_Cia402_ReadObject(uint16_t index, uint8_t subIndex,
                           uint8_t *value, uint8_t *size);
 bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
                            const uint8_t *value, uint8_t size);
+bool MC_Cia402Ext_ReadObject(uint16_t index, uint8_t subIndex,
+                             uint8_t *value, uint8_t *size);
+bool MC_Cia402Ext_WriteObject(uint16_t index, uint8_t subIndex,
+                              const uint8_t *value, uint8_t size);
 int8_t MC_Cia402_GetMode(void);
 uint16_t MC_Cia402_GetControlword(void);
 

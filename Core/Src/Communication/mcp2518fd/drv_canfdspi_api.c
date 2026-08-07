@@ -3990,8 +3990,22 @@ CAN_DLC DRV_CANFDSPI_DataBytesToDlc(uint8_t n)
 {
     CAN_DLC dlc = CAN_DLC_0;
 
-    if (n <= 4) {
+    if (n == 0U) {
+        dlc = CAN_DLC_0;
+    } else if (n == 1U) {
+        dlc = CAN_DLC_1;
+    } else if (n == 2U) {
+        dlc = CAN_DLC_2;
+    } else if (n == 3U) {
+        dlc = CAN_DLC_3;
+    } else if (n == 4U) {
         dlc = CAN_DLC_4;
+    } else if (n == 5U) {
+        dlc = CAN_DLC_5;
+    } else if (n == 6U) {
+        dlc = CAN_DLC_6;
+    } else if (n == 7U) {
+        dlc = CAN_DLC_7;
     } else if (n <= 8) {
         dlc = CAN_DLC_8;
     } else if (n <= 12) {
