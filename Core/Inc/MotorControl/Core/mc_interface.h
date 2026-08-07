@@ -82,6 +82,19 @@ MC_RetStatus_t MC_Set_Torque_Reference(float fIqA);
   * @param  controlword 0x6040
   */
 MC_RetStatus_t MC_Apply_Cia402_Controlword(uint16_t controlword);
+void MC_Cia402_ResetState(void);
+
+/*
+ * Protocol-independent CiA 402 object dictionary access.  CANopen SDO/PDO
+ * and CDC use these same entry points so the control behavior is identical
+ * regardless of the transport.
+ */
+bool MC_Cia402_ReadObject(uint16_t index, uint8_t subIndex,
+                          uint8_t *value, uint8_t *size);
+bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
+                           const uint8_t *value, uint8_t size);
+int8_t MC_Cia402_GetMode(void);
+uint16_t MC_Cia402_GetControlword(void);
 
 /**
   * @brief  CiA 402 fault reset

@@ -363,7 +363,8 @@ static bool ParamId_IsLockRequiredStep(ParamIdStep_t step)
 
 static bool ParamId_IsValidCanNodeId(uint8_t nodeId)
 {
-    return (nodeId <= CAN_NODE_ID_MASK);
+    /* CANopen reserves node 0 for broadcast and permits 1..127. */
+    return (nodeId >= 1U) && (nodeId <= 127U);
 }
 
 static uint32_t ParamId_AngleRawDiffNative(uint32_t a, uint32_t b, uint32_t counts)

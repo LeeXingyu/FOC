@@ -201,7 +201,7 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 #ifndef APP_COMM_USE_CDC_ONLY
-#define APP_COMM_USE_CDC_ONLY        1U
+#define APP_COMM_USE_CDC_ONLY        0U
 #endif
 void Comm_Protocol_Startup(void);
 void ADC_Rule_Collect(ADC_HandleTypeDef* hadc, ADC_Rule_Data_t* data);

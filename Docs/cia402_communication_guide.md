@@ -1,283 +1,442 @@
 # CiA 402 Communication Guide
 
-## 1. Overview
+## 1. Purpose
 
-This document describes the CiA 402 style communication layer currently added to this project.
+This document describes the current CiA 402 implementation shared by the CAN
+and CDC interfaces.
 
-Important note:
+CiA 402 is implemented in the motor-control core rather than duplicated in
+the transport layer. CANopen SDO/RPDO access and CDC `cia402` commands use the
+same object and state-machine APIs:
 
-- the project still uses the existing custom CAN transport based on `MCP2518FD`
-- CiA 402 is implemented as a compatibility mapping layer on top of the current CAN protocol
-- the legacy custom commands remain available unless you disable the CiA 402 layer through macros
+```c
+MC_Cia402_ReadObject()
+MC_Cia402_WriteObject()
+MC_Apply_Cia402_Controlword()
+MC_Get_Cia402_Statusword()
+```
 
-Primary reference files:
+Primary files:
 
-- `Core/Inc/MotorControl/Core/motor_parameters.h`
 - `Core/Inc/MotorControl/Core/mc_interface.h`
 - `Core/Src/MotorControl/Core/mc_interface.c`
 - `Core/Src/Communication/mcp2518fd/canopen.c`
-- `Core/Src/Communication/mcp2518fd/can_telemetry.c`
+- `USB_Device/App/usbd_cdc_if.c`
 
-## 2. Design Goal
+The CAN transport uses standard CANopen COB-IDs. The old custom function-code
+commands are retained only for compatibility.
 
-The goal of this layer is to expose a CiA 402-like interface without breaking the current control flow.
+## 2. CiA 402 State Machine
 
-Supported mapping:
+The shared state machine contains:
 
-- `controlword` to motor start / stop / fault reset
-- `mode of operation` to control mode selection
-- `target speed` to speed reference
-- `target torque` to Iq reference
-- `statusword` to current axis state
-
-This is intentionally not a full EtherCAT CiA 402 stack.
-
-## 3. Compile-Time Switch
-
-Enable or disable the CiA 402 CAN mapping with:
-
-```c
-#define APP_USE_CIA402_CAN 1U
+```text
+Switch on disabled
+Ready to switch on
+Switched on
+Operation enabled
+Quick stop active
+Fault
 ```
 
-Defined in:
+The state is maintained by the CiA 402 core and reflected in object
+`0x6041`.
 
-- `Core/Inc/MotorControl/Core/motor_parameters.h`
+### 2.1 Controlword transitions
 
-Current behavior:
+The standard enable sequence is:
 
-- `1U`: CiA 402 CAN compatibility layer is enabled
-- `0U`: CiA 402 additions are excluded, legacy custom CAN remains
-
-## 4. CAN Transport Basis
-
-The project still uses the existing 11-bit CAN ID layout:
-
-```c
-SID[10:4] = function code
-SID[3:0]  = node ID
-```
-
-Helper macros:
-
-```c
-CAN_MAKE_ID(func, node)
-CAN_GET_FUNC(id)
-CAN_GET_NODE(id)
-```
-
-Node ID range:
-
-- `0 ~ 15`
-
-## 5. CiA 402 Object Mapping
-
-The following CiA 402-style objects are mapped into the current CAN function codes.
-
-### 5.1 Downlink commands
-
-| Function code | Meaning | Payload |
-| --- | --- | --- |
-| `0x10` | controlword | `2 B` |
-| `0x11` | mode of operation | `1 B` |
-| `0x12` | target speed | `4 B` |
-| `0x13` | target torque | `2 B` |
-
-### 5.2 Uplink status
-
-| Function code | Meaning | Payload |
-| --- | --- | --- |
-| `0x14` | statusword / runtime status | `8 B` |
-
-## 6. Controlword Mapping
-
-The controlword is handled by:
-
-- `MC_Apply_Cia402_Controlword()`
-
-Current simplified behavior:
-
-- bit 7 set: fault reset
-- enable sequence accepted when lower enable bits request run state
-- disable request stops the motor
-
-Practical mapping:
-
-| Controlword condition | Internal action |
+| Controlword | Transition |
 | --- | --- |
-| bit7 = 1 | fault reset |
-| enable bits request active state | `MC_Start_Motor()` |
-| enable bits cleared | `MC_Stop_Motor()` |
+| `0x0006` | Switch on disabled -> Ready to switch on |
+| `0x0007` | Ready to switch on -> Switched on |
+| `0x000F` | Switched on -> Operation enabled |
+| `0x0007` | Operation enabled -> Switched on |
+| `0x0006` | Operation enabled -> Ready to switch on |
+| bit 2 cleared | Operation enabled -> Quick stop active |
+| bit 7 set in Fault | Fault reset |
 
-This is a minimal implementation intended to align with current firmware behavior.
+When entering Operation enabled, the core calls `MC_Start_Motor()`. When
+leaving the enabled state, the core stops the motor and resets the control
+references through the existing motor-control interface.
 
-## 7. Mode Of Operation Mapping
+### 2.2 Statusword bits
 
-The mode command is handled by:
+The following bits are generated:
 
-- `MC_Set_Control_Mode()`
+| Bit | Meaning |
+| --- | --- |
+| 0 | Ready to switch on |
+| 1 | Switched on |
+| 2 | Operation enabled |
+| 3 | Fault |
+| 4 | Voltage enabled indication while operation is enabled |
+| 5 | Quick stop active |
+| 6 | Switch on disabled |
+| 8 | Torque mode indication |
+| 10 | Target reached / velocity indication |
+| 12 | Position mode indication |
 
-Supported CiA 402 values:
+The exact state and mode are available through SDO object `0x6041` and TPDO
+mapping.
 
-| CiA 402 mode | Meaning | Internal control mode |
+## 3. Modes of Operation
+
+Object `0x6060` selects the CiA 402 mode. Object `0x6061` reports the selected
+mode.
+
+| Value | CiA 402 mode | Internal mode |
 | --- | --- | --- |
 | `1` | Profile Position | `CTRL_MODE_POSITION` |
 | `3` | Profile Velocity | `CTRL_MODE_SPEED` |
 | `4` | Profile Torque | `CTRL_MODE_TORQUE` |
-| `8` | Cyclic Sync Position | `CTRL_MODE_POSITION` |
-| `9` | Cyclic Sync Velocity | `CTRL_MODE_SPEED` |
-| `10` | Cyclic Sync Torque | `CTRL_MODE_TORQUE` |
+| `8` | Cyclic Synchronous Position | `CTRL_MODE_POSITION` |
+| `9` | Cyclic Synchronous Velocity | `CTRL_MODE_SPEED` |
+| `10` | Cyclic Synchronous Torque | `CTRL_MODE_TORQUE` |
 
-Unsupported values return bad argument status.
+Unsupported mode values are rejected by the object write interface.
 
-## 8. Target Speed Mapping
+## 4. CiA 402 Object Dictionary
 
-Function code:
+| Index | Object | Access | Unit |
+| --- | --- | --- | --- |
+| `0x6040` | Controlword | read/write | bit mask |
+| `0x6041` | Statusword | read-only | bit mask |
+| `0x6060` | Modes of operation | read/write | mode value |
+| `0x6061` | Modes display | read-only | mode value |
+| `0x6064` | Position actual value | read-only | encoder counts |
+| `0x606C` | Velocity actual value | read-only | rpm |
+| `0x6071` | Target torque | read/write | mA |
+| `0x607A` | Target position | read/write | encoder counts |
+| `0x60FF` | Target velocity | read/write | rpm |
 
-- `0x12`
+### 4.1 Controlword `0x6040`
 
-Payload:
+The controlword is a 16-bit little-endian value. The normal enable sequence
+is:
 
-- `4 B`, little-endian signed integer
+```text
+0x0006 -> 0x0007 -> 0x000F
+```
 
-Current interpretation:
+The SDO expedited download must match the object width. For `0x6040`,
+send command `0x2B` and eight CAN data bytes:
 
-- unit: `rpm`
-- value is passed to `MC_Set_Speed_Reference()`
+```text
+CAN ID: 0x601
+Data:   2B 40 60 00 06 00 00 00
+```
 
-Notes:
+Using `0x23` for this 16-bit object is rejected with SDO abort
+`0x06070010`; a rejected controlword value or invalid state transition uses
+`0x06090030`.
 
-- positive speed means forward rotation according to the firmware direction convention
-- negative speed means reverse rotation
+The object write is accepted through:
 
-## 9. Target Torque Mapping
+```text
+CAN SDO: 0x600 + NodeID
+CAN RPDO1: 0x200 + NodeID
+CDC CiA 402 command path
+```
 
-Function code:
+For NodeID 1, the standard SDO frame for `0x0006` is:
 
-- `0x13`
+```text
+CAN ID: 0x601
+Data:   2B 40 60 00 06 00 00 00
+```
 
-Payload:
+The successful SDO response is:
 
-- `2 B`, little-endian signed integer
+```text
+CAN ID: 0x581
+Data:   60 40 60 00 00 00 00 00
+```
 
-Current interpretation:
+The value is little-endian. `06 00` means `0x0006`; `00 06` means
+`0x0600` and is not automatically byte-swapped by the firmware.
 
-- unit: `mA`
-- value is converted to `A` and passed to `MC_Set_Torque_Reference()`
+Do not confuse the CAN identifier with the object index:
 
-Example:
+- `0x601` is the CANopen SDO request COB-ID for NodeID `1`.
+- `0x6040` is the CiA 402 controlword object index.
+- `0x1000` is the CANopen device type object index.
 
-- `1000` means `1.000 A`
-- `-500` means `-0.500 A`
+So "write `0x6040`" means:
 
-## 10. Statusword Mapping
+1. send the frame to CAN ID `0x601` when NodeID is `1`
+2. place `40 60 00` in payload bytes `1..3`
+3. place the controlword value in little-endian form in payload bytes `4..7`
 
-Function code:
+### 4.2 Statusword `0x6041`
 
-- `0x14`
+The statusword is a 16-bit little-endian value generated by
+`MC_Get_Cia402_Statusword()`. It is available through:
 
-Current payload layout:
+```text
+CAN SDO upload
+TPDO1
+CDC telemetry status
+```
 
-| Byte | Meaning |
-| --- | --- |
-| `0..1` | `statusword`, little-endian |
-| `2..3` | actual speed, signed `rpm` |
-| `4..5` | target Iq, signed `mA` |
-| `6` | internal control mode |
-| `7` | internal axis state |
+### 4.3 Velocity objects
 
-### 10.1 Statusword source
+`0x60FF` and `0x606C` use signed 32-bit little-endian values in rpm:
 
-Statusword is generated by:
+```text
+0x60FF: Target velocity
+0x606C: Velocity actual value
+```
 
-- `MC_Get_Cia402_Statusword()`
+Positive and negative values select the two firmware rotation directions.
+Direction correctness still depends on the encoder direction and the
+`SPEED_MEAS_INVERT` configuration.
 
-The mapping is currently simplified and reflects internal axis state rather than a complete CiA 402 state machine.
+### 4.4 Torque object
 
-## 11. Internal API Hooks
+`0x6071` uses a signed 16-bit little-endian value in mA:
 
-The CiA 402 layer uses these motor control APIs:
+```text
+1000  = 1.000 A
+-500  = -0.500 A
+```
 
-- `MC_Start_Motor()`
-- `MC_Stop_Motor()`
-- `MC_Set_Control_Mode()`
-- `MC_Set_Speed_Reference()`
-- `MC_Set_Torque_Reference()`
-- `MC_Apply_Cia402_Controlword()`
-- `MC_Fault_Reset()`
-- `MC_Get_Cia402_Statusword()`
+The value is converted to the motor-control current reference.
 
-## 12. Legacy Command Compatibility
+### 4.5 Position objects
 
-The following existing custom commands are still supported:
+`0x607A` and `0x6064` use signed 32-bit little-endian encoder counts:
 
-- start / stop motor
-- speed mode / position mode / open loop mode
-- speed Kp / Ki
-- target speed
-- pole pair configuration
-- calibration commands
-- flash commands
-- node ID read / write
+```text
+0x607A: Target position
+0x6064: Position actual value
+```
 
-This means:
+Position mode uses the existing position controller. The target-reached
+indication is reflected in statusword bit 10 when the position error is within
+the configured tolerance.
 
-- the CiA 402 layer does not replace the old protocol
-- both sets of commands can coexist on the same CAN transport
+## 5. Standard CANopen PDO Mapping
 
-## 13. Suggested Host Side Usage
+### 5.1 RPDO1
 
-Recommended control sequence:
+COB-ID:
 
-1. set mode with `0x11`
-2. send controlword with `0x10`
-3. write target speed or target torque
-4. monitor `0x14` for statusword and runtime feedback
+```text
+0x200 + NodeID
+```
 
-Recommended example flow for speed mode:
+Default mapping:
 
-1. send mode `9`
-2. send enable controlword
-3. send target speed in rpm
-4. read statusword and actual speed
+```text
+0x6040:00 / 16 bits
+0x60FF:00 / 32 bits
+```
 
-Recommended example flow for torque mode:
+Typical payload:
 
-1. send mode `10`
-2. send enable controlword
-3. send target torque in mA
-4. read statusword and actual speed
+```text
+Byte 0..1: Controlword
+Byte 2..5: Target velocity
+```
 
-## 14. Important Limitations
+### 5.2 RPDO2
 
-Current implementation limitations:
+COB-ID:
 
-- not a full CiA 402 object dictionary
-- no standard PDO / SDO stack
-- no full fault state transition table
-- statusword is a simplified firmware-level mapping
-- communication still uses custom CAN function codes
+```text
+0x300 + NodeID
+```
 
-## 15. Extension Points
+Default mapping:
 
-If you want to move closer to a standard CiA 402 layout, the next step is usually:
+```text
+0x6060:00 / 8 bits
+0x6071:00 / 16 bits
+```
 
-- map `0x6040` controlword
-- map `0x6041` statusword
-- map `0x6060` mode of operation
-- map `0x6061` mode display
-- map `0x60FF` target speed
-- map `0x6071` target torque
-- map `0x606C` actual speed
+Typical payload:
 
-## 16. Update Policy
+```text
+Byte 0:    Modes of operation
+Byte 1..2: Target torque
+```
 
-Update this document when any of the following changes:
+### 5.3 TPDO1
 
-- controlword handling
-- statusword bit mapping
-- mode mapping
-- target speed / torque scaling
-- CAN function code allocation
-- legacy command coexistence rules
+COB-ID:
 
+```text
+0x180 + NodeID
+```
+
+Default mapping:
+
+```text
+0x6041:00 / 16 bits
+0x606C:00 / 32 bits
+0x6061:00 / 8 bits
+0x1001:00 / 8 bits
+```
+
+### 5.4 TPDO2
+
+COB-ID:
+
+```text
+0x280 + NodeID
+```
+
+Default mapping:
+
+```text
+0x6064:00 / 32 bits
+0x607A:00 / 32 bits
+```
+
+RPDO2 and TPDO2 are configured through:
+
+```text
+0x1401 / 0x1601
+0x1801 / 0x1A01
+```
+
+PDO mapping entries use the CANopen format:
+
+```text
+bits 31..16: object index
+bits 15..8 : sub-index
+bits 7..0  : length in bits
+```
+
+The standard mapping update sequence is:
+
+1. Disable the PDO using COB-ID bit 31.
+2. Write mapping count `0`.
+3. Write mapping entries.
+4. Write the final mapping count.
+5. Set transmission type and timers.
+6. Re-enable the PDO.
+
+## 6. SDO Access
+
+SDO request and response:
+
+```text
+Request:  0x600 + NodeID
+Response: 0x580 + NodeID
+```
+
+Supported transfer types:
+
+- expedited upload
+- expedited download
+- segmented upload
+- segmented download
+
+The device name object `0x1008` is a segmented-upload example. The segmented
+session supports toggle validation, seven data bytes per segment, last segment
+indication and length checks.
+Each segmented upload request is an 8-byte CAN frame. The first toggle-0
+request is `60 00 00 00 00 00 00 00`.
+
+Example expedited write of Profile Velocity mode for NodeID 1:
+
+```text
+CAN ID: 0x601
+Data:   2F 60 60 00 03 00 00 00
+```
+
+Example expedited write of target velocity 1000 rpm:
+
+```text
+CAN ID: 0x601
+Data:   23 FF 60 00 E8 03 00 00
+```
+
+Example SDO upload of statusword:
+
+```text
+CAN ID: 0x601
+Data:   40 41 60 00 00 00 00 00
+```
+
+If an SDO download is rejected, the response uses the standard abort frame
+on `0x580 + NodeID`. The firmware uses `0x06070010` for a size mismatch,
+`0x06090030` for an invalid CiA 402 value or state transition, and
+`0x06010002` for an unsupported or read-only object.
+
+## 7. NMT and Operational Sequence
+
+Recommended standard-master sequence:
+
+1. Wait for boot-up heartbeat `0x700 + NodeID`, data `00`.
+2. Send NMT Pre-operational:
+
+   ```text
+   COB-ID: 0x000
+   Data:   80 NodeID
+   ```
+
+3. Configure PDO communication and mapping with SDO.
+4. Write `0x6060`.
+5. Execute the CiA 402 controlword sequence.
+6. Send NMT Start:
+
+   ```text
+   COB-ID: 0x000
+   Data:   01 NodeID
+   ```
+
+7. Use RPDOs for cyclic control and TPDOs for feedback.
+
+SDO configuration is accepted in Pre-operational. RPDO processing requires
+Operational NMT state.
+
+## 8. CDC Interface
+
+CDC CiA 402 commands use the same core object functions as CAN:
+
+```c
+MC_Cia402_WriteObject(0x6040, ...)
+MC_Cia402_WriteObject(0x6060, ...)
+MC_Cia402_WriteObject(0x60FF, ...)
+```
+
+Therefore CDC and CAN share:
+
+- the same controlword state transitions
+- the same mode validation
+- the same speed/torque/position units
+- the same statusword generation
+
+The legacy CDC command syntax is a transport-specific diagnostic interface.
+It must not be confused with standard CANopen SDO or PDO frames.
+
+## 9. Current Validation Status
+
+Source-level validation completed:
+
+- CiA 402 core syntax check
+- CANopen source syntax check
+- dynamic RPDO1/2 mapping path
+- dynamic TPDO1/2 mapping path
+- SDO segmented session path
+
+Hardware validation still required:
+
+- standard master SDO PDO initialization
+- RPDO1 velocity control
+- RPDO2 mode/torque control
+- TPDO1 status/velocity reporting
+- TPDO2 position reporting
+- SYNC-triggered TPDO
+- event timer and inhibit time behavior
+- EMCY on injected axis faults
+
+Not currently implemented as a complete CANopen product:
+
+- RPDO3/4 and TPDO3/4
+- heartbeat consumer
+- complete Node Guarding
+- complete CANopen conformance test suite

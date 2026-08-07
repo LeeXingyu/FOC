@@ -1,632 +1,524 @@
 # CAN Communication Guide
 
-## 1. Overview
+## 1. Scope
 
-This document describes the current CAN / CAN FD communication implementation in this project.
+This document describes the current MCP2518FD CAN/CAN FD implementation.
+The primary control protocol is now standard CANopen with a CiA 402 device
+profile. The older function-code protocol remains in the firmware as a
+diagnostic and compatibility path, but it is not the primary CiA 402
+interface.
 
-Primary reference files:
+The default build uses standard CANopen only:
+
+```c
+#define APP_USE_LEGACY_CAN_PROTOCOL 0U
+```
+
+Set this switch to `1U` only for a compatibility build that must also accept
+the older function-code commands and periodic telemetry.
+
+Primary implementation files:
 
 - `Core/Inc/Communication/mcp2518fd/canopen.h`
 - `Core/Src/Communication/mcp2518fd/canopen.c`
 - `Core/Src/Communication/mcp2518fd/can_telemetry.c`
+- `Core/Src/MotorControl/Core/mc_interface.c`
 - `Core/Src/app_freertos.c`
-- `Core/Src/MotorControl/Control/param_identify.c`
 
-The project uses `MCP2518FD` as the external CAN controller.
+The MCP2518FD is an external CAN controller connected over SPI. The firmware
+uses standard 11-bit CAN identifiers for CANopen frames.
 
-Current protocol characteristics:
+## 2. CAN and CAN FD Configuration
 
-- standard 11-bit arbitration ID
-- ID contains both function code and node ID
-- command function codes stay fixed
-- telemetry mapping is selected by compile-time macro
-- `APP_USE_CAN_FD = 0`: classical CAN telemetry layout
-- `APP_USE_CAN_FD = 1`: CAN FD telemetry layout
-
-## 2. CAN ID Format
-
-### 2.1 Arbitration ID layout
-
-Current macro definitions:
+The compile-time switch is defined in
+`Core/Inc/Communication/mcp2518fd/canopen.h`:
 
 ```c
-#define CAN_NODE_ID_BITS             4U
-#define CAN_NODE_ID_MASK             0x0FU
-#define CAN_FUNCTION_CODE_SHIFT      CAN_NODE_ID_BITS
-#define CAN_MAKE_ID(func, node)      ((((uint16_t)(func)) << 4) | ((uint16_t)(node) & 0x0F))
+#ifndef APP_USE_CAN_FD
+#define APP_USE_CAN_FD 0
+#endif
 ```
 
-Meaning:
+When `APP_USE_CAN_FD = 0`:
 
-- `SID[10:4]`: function code
-- `SID[3:0]`: node ID
+- Classical CAN frame format is used.
+- Maximum payload is 8 bytes.
+- Nominal bit rate is configured by `APP_CAN_BITTIME_SETUP`.
 
-Equivalent formula:
+When `APP_USE_CAN_FD = 1`:
 
-```c
-SID = (func << 4) | node
-```
+- CAN FD frame format is used.
+- Bit rate switching is enabled.
+- Maximum payload is 16 bytes.
+- The configured timing is nominal 500 kbps and data 2 Mbps.
 
-### 2.2 Node ID range
+The CANopen CiA 402 objects and COB-IDs use the same standard identifier
+values in both modes. CAN FD only changes the available payload size and the
+legacy telemetry layout.
 
-Current node ID range:
+`APP_USE_LEGACY_CAN_PROTOCOL = 0U` suppresses the old `0x301..0x351`
+telemetry and command-status frames. In this default mode, `0x300 + NodeID`
+is reserved for standard RPDO2 and must not be interpreted as telemetry.
+The firmware transmit path also rejects any outgoing identifier that is not
+the configured EMCY, TPDO1, TPDO2, SDO response, or heartbeat COB-ID.
 
-- `0 ~ 15`
+## 3. Node ID
 
-Default node ID:
-
-- `1`
-
-The runtime node ID is maintained by:
+The CANopen node ID is stored by the parameter module:
 
 - `ParamId_GetCanNodeId()`
 - `ParamId_SaveCanNodeIdToFlash()`
 
-The node ID is stored to flash together with motor-related parameters.
+The valid CANopen node ID range is:
 
-## 3. CAN / CAN FD Compile-Time Switch
-
-The protocol behavior is selected by:
-
-```c
-#ifndef APP_USE_CAN_FD
-#define APP_USE_CAN_FD 1
-#endif
+```text
+1..127
 ```
 
-Current macro behavior in `canopen.h`:
+Node ID `0` is reserved for broadcast and is not a valid local node ID.
+The default node ID is `1`.
 
-### 3.1 When `APP_USE_CAN_FD = 1`
+Changing the node ID updates the local CAN acceptance configuration. The
+standard CANopen COB-IDs are calculated from the current node ID.
 
-- `APP_CAN_FRAME_FDF = 1`
-- `APP_CAN_FRAME_BRS = 1`
-- `APP_CAN_MAX_DATA_BYTES = 16`
-- `APP_CAN_RX_FETCH_BYTES = 16`
-- `APP_CAN_BITTIME_SETUP = CAN_500K_2M`
+## 4. Standard CANopen COB-IDs
 
-Meaning:
+The following standard identifiers are implemented:
 
-- arbitration bit rate: `500 kbps`
-- data bit rate: `2 Mbps`
+| COB-ID | Direction | Function |
+| --- | --- | --- |
+| `0x000` | master -> all | NMT |
+| `0x080` | master -> all | SYNC |
+| `0x080 + NodeID` | device -> master | EMCY |
+| `0x180 + NodeID` | device -> master | TPDO1 |
+| `0x200 + NodeID` | master -> device | RPDO1 |
+| `0x280 + NodeID` | device -> master | TPDO2 |
+| `0x300 + NodeID` | master -> device | RPDO2 |
+| `0x580 + NodeID` | device -> master | SDO response |
+| `0x600 + NodeID` | master -> device | SDO request |
+| `0x700 + NodeID` | device -> master | Heartbeat |
 
-### 3.2 When `APP_USE_CAN_FD = 0`
-
-- `APP_CAN_FRAME_FDF = 0`
-- `APP_CAN_FRAME_BRS = 0`
-- `APP_CAN_MAX_DATA_BYTES = 8`
-- `APP_CAN_RX_FETCH_BYTES = 8`
-- `APP_CAN_BITTIME_SETUP = CAN_500K_2M`
-
-Meaning:
-
-- only classical CAN frame format is used
-- nominal bit timing remains `500 kbps`
-
-## 4. Communication Thread Flow
-
-The communication thread is `Communication_Task()` in `app_freertos.c`.
-
-When `g_system_comm_mode == COMM_PROTO_CAN`, the loop executes:
-
-1. `CAN_Telemetry_Service1ms()`
-2. `MCP2518FD_Service1ms()`
-3. if `g_comm_int_irq_pending != 0`, clear the flag and call `MCP2518FD_ProcessRxIrq()`
-4. call `CAN_Telemetry_Service1ms()` once more after RX handling
-
-Important behavior:
-
-- interrupt only notifies
-- actual SPI access is done in thread context
-- TX queue has higher priority than periodic telemetry
-- RX-handled command status can be sent in the same thread iteration after being queued
-
-## 5. MCP2518FD Initialization
-
-`CANFD_INIT()` currently performs:
-
-- device reset
-- ECC enable
-- RAM initialization
-- module configuration
-- TX FIFO configuration
-- RX FIFO configuration
-- node filter configuration
-- broadcast `GET_ID` filter configuration
-- bit timing configuration
-- interrupt GPIO configuration
-- RX event enable
-- switch to normal mode
-
-Key settings:
-
-- TX FIFO: `CAN_FIFO_CH2`
-- RX FIFO: `CAN_FIFO_CH1`
-- TX payload size: `APP_CAN_TX_FIFO_PAYLOAD_SIZE`
-- RX payload size: `APP_CAN_RX_FIFO_PAYLOAD_SIZE`
-- bit timing: `APP_CAN_BITTIME_SETUP`
-
-## 6. Receive Filter Strategy
-
-Two hardware receive filters are used.
-
-### 6.1 Filter0: local node command filter
-
-Purpose:
-
-- accept frames targeted to the current local node
-
-Matching rule:
-
-- compare `SID[3:0]`
-- lower 4 bits must equal current node ID
-
-### 6.2 Filter1: broadcast `GET_ID`
-
-Purpose:
-
-- support single-device commissioning when the host does not know the node ID
-
-Matching frame:
-
-- `CAN_MAKE_ID(CAN_FC_GET_ID, 0)`
-- example: `0x0E0`
-
-This is intended for single-device use only.
-
-## 7. Command Protocol
-
-Receive-side dispatch uses:
+The COB-ID constants are declared in `canopen.h`:
 
 ```c
-func = CAN_GET_FUNC(sid)
-node = CAN_GET_NODE(sid)
+#define CANOPEN_COBID_NMT             0x000U
+#define CANOPEN_COBID_TPDO1_BASE      0x180U
+#define CANOPEN_COBID_RPDO1_BASE      0x200U
+#define CANOPEN_COBID_TPDO2_BASE      0x280U
+#define CANOPEN_COBID_RPDO2_BASE      0x300U
+#define CANOPEN_COBID_SDO_TX_BASE     0x580U
+#define CANOPEN_COBID_SDO_RX_BASE     0x600U
+#define CANOPEN_COBID_HEARTBEAT_BASE  0x700U
 ```
 
-Command matching is based on function code.
+## 5. Startup and Communication Task
 
-Current runtime semantics:
+`CANFD_INIT()` configures the MCP2518FD, enables the receive FIFO, and
+initializes the CANopen node in Pre-operational state. A CANopen boot-up
+heartbeat with data `0x00` is sent on:
 
-- `START_MOTOR` is the run-enable command: `IDLE -> RUN`
-- `STOP_MOTOR` is the stop command: any allowed running/calibration path -> `IDLE`
-- base calibration is a separate chain and is not entered by `START_MOTOR`
+```text
+0x700 + NodeID
+```
 
-### 7.1 Command function codes
+The communication task is implemented in `Communication_Task()`:
 
-| Function code | Example SID for node `1` | Command | Payload length |
-| --- | --- | --- | --- |
-| `0x01` | `0x011` | stop motor, return to `IDLE` | `0` |
-| `0x02` | `0x021` | start motor, enter `RUN` | `0` |
-| `0x03` | `0x031` | switch to speed mode | `0` |
-| `0x04` | `0x041` | switch to position mode | `0` |
-| `0x05` | `0x051` | switch to open loop / VF mode | `0` |
-| `0x06` | `0x061` | set speed reference | `4` |
-| `0x07` | `0x071` | set speed Kp | `4` |
-| `0x08` | `0x081` | set speed Ki | `4` |
-| `0x09` | `0x091` | set pole pairs | `1` |
-| `0x0A` | `0x0A1` | start calibration chain or parameter calibration | `1` |
-| `0x0B` | `0x0B1` | stop parameter calibration | `0` |
-| `0x0C` | `0x0C1` | read flash params | `0` |
-| `0x0D` | `0x0D1` | clear flash | `0` |
-| `0x0E` | `0x0E1` | get node ID | `0` |
-| `0x0F` | `0x0F1` | set node ID | `1` |
+1. Process pending MCP2518FD receive interrupts.
+2. Drain the receive FIFO in thread context.
+3. Run `MCP2518FD_Service1ms()`.
+4. Run `CAN_Telemetry_Service1ms()`.
 
-### 7.2 Command payload rules
+The service path provides:
 
-`SET_REF_SPEED`, `SET_SPEED_KP`, `SET_SPEED_KI`
+- CANopen heartbeat producer
+- TPDO event scheduling
+- SYNC-triggered TPDO handling
+- EMCY edge reporting
+- legacy parameter and telemetry queue transmission only when
+  `APP_USE_LEGACY_CAN_PROTOCOL = 1U`
 
-- 4-byte little-endian IEEE754 `float`
+The interrupt handler only signals the task. SPI transfers are performed
+outside interrupt context.
 
-`SET_POLE_PAIRS`
+## 6. NMT
 
-- 1 byte
-- `0` is invalid
+NMT messages use COB-ID `0x000`:
 
-`CALIB_START`
+```text
+Byte 0: command
+Byte 1: target node, 0 means broadcast
+```
 
-- 1 byte mode
+Supported commands:
 
-Supported values:
+| Command | Meaning |
+| --- | --- |
+| `0x01` | Start remote node, enter Operational |
+| `0x02` | Stop remote node |
+| `0x80` | Enter Pre-operational |
+| `0x81` | Reset node, emit Boot-up, then enter Pre-operational |
 
-- `0`: full chain
-- `5`: parameter identification full flow
+RPDO processing is enabled only while the local NMT state is Operational.
+SDO access is available while the node is Pre-operational and Operational.
 
-Base calibration flow:
+## 7. Heartbeat
 
-1. current offset calibration
-2. encoder calibration
-3. return to `IDLE`
+Heartbeat is produced on:
 
-Parameter identification flow:
+```text
+0x700 + NodeID
+```
 
-- only allowed when the axis is already in `IDLE`
-- only allowed after the base calibration flag has been set
-- `CALIB_STOP` returns the axis to `IDLE`
-
-`SET_ID`
-
-- 1 byte new node ID
-- valid range: `0 ~ 15`
-
-`GET_ID`
-
-- no payload
-- broadcast `E0` is accepted by dedicated hardware filter
-
-### 7.3 Command status return values
+Heartbeat payload:
 
 | Value | Meaning |
 | --- | --- |
-| `0` | `OK` |
-| `1` | `BAD_LEN` |
-| `2` | `BAD_ARG` |
-| `3` | `BAD_STATE` |
-| `4` | `BUSY` |
-| `5` | `UNKNOWN` |
+| `0x00` | Boot-up |
+| `0x04` | Stopped |
+| `0x05` | Operational |
+| `0x7F` | Pre-operational |
 
-## 8. Response Frames
+The producer period is configured through object `0x1017` in milliseconds.
+The default is 1000 ms.
 
-Response function codes are always preserved, independent of `CAN` or `CANFD`.
+## 8. SYNC and EMCY
 
-| Function code | Example SID for node `1` | Meaning |
-| --- | --- | --- |
-| `0x20` | `0x201` | command status response |
-| `0x21` | `0x211` | parameter state |
-| `0x22` | `0x221` | parameter result block 1 |
-| `0x23` | `0x231` | parameter result block 2, classical CAN only |
+SYNC uses COB-ID `0x080`. The node accepts both zero-length SYNC frames and
+SYNC frames containing a counter. TPDOs configured with synchronous
+transmission types `1..240` are sent when SYNC is received.
 
-### 8.1 Command status response `0x20x`
+EMCY uses:
 
-Current payload definition:
+```text
+0x080 + NodeID
+```
 
-| Byte | Meaning |
-| --- | --- |
-| `0..1` | original command SID, little-endian |
-| `2` | command status |
-| `3` | current `g_axis.state` |
-| `4` | extra field |
-| `5` | parameter identification state |
-| `6` | received payload length |
-| `7` | current pole-pair count |
-
-When `APP_USE_CAN_FD = 1`, extra bytes are appended:
+The current payload is 8 bytes:
 
 | Byte | Meaning |
 | --- | --- |
-| `8` | current node ID |
-| `9` | `raw_COMM_ID` |
-| `10..11` | `raw_TSENA` |
+| `0..1` | emergency error code |
+| `2` | error register |
+| `3..7` | manufacturer-specific data, currently zero/axis error data |
 
-So:
+An EMCY is queued when `g_axis.error` changes.
 
-- classical CAN: `8 B`
-- CAN FD: `12 B`
+## 9. SDO
 
-For `GET_ID` / `SET_ID`:
+SDO request and response identifiers are:
 
-- `extra` returns the node ID value
+```text
+Request:  0x600 + NodeID
+Response: 0x580 + NodeID
+```
 
-Broadcast `E0` rule:
+Important distinction:
 
-- request SID: `0x0E0`
-- response SID uses real local node ID, for example `0x205`
+- `0x601` is the CAN frame identifier for an SDO request to NodeID `1`.
+- `0x1000`, `0x6040`, `0x6041` are object dictionary indices carried inside the
+  SDO payload.
 
-### 8.2 Parameter state response `0x21x`
+For example, writing controlword `0x6040:00` on NodeID `1` uses CAN ID
+`0x601`, and bytes `1..3` of the payload contain index `0x6040` plus the
+sub-index:
 
-Payload:
+```text
+CAN ID: 0x601
+Data:   2B 40 60 00 06 00 00 00
+        ^^
+        SDO command specifier
+           ^^^^^^^^
+           index 0x6040, sub-index 0x00
+                    ^^^^^
+                    value 0x0006, little-endian
+```
 
-| Byte | Meaning |
+The implementation supports:
+
+- expedited upload
+- expedited download
+- segmented upload
+- segmented download
+- toggle bit checking
+- last-segment and unused-byte handling
+- download length checking
+- SDO abort responses for unsupported or invalid objects
+
+The segmented session buffer is 255 bytes. Standard CiA 402 scalar objects
+normally use expedited transfers. The device name object `0x1008` is
+available as a segmented-upload example.
+Segment upload requests use an 8-byte CAN data field; for example, the first
+toggle-0 request is `60 00 00 00 00 00 00 00`.
+
+Common SDO commands:
+
+| Command | Meaning |
 | --- | --- |
-| `0` | current axis state |
-| `1` | parameter state |
-| `2` | pole pairs |
-| `3` | validity bits |
-| `4..5` | pole pairs as `uint16_t` |
+| `0x40` | initiate upload |
+| `0x23` | expedited download, 4 bytes |
+| `0x2B` | expedited download, 2 bytes |
+| `0x2F` | expedited download, 1 byte |
+| `0x21` | initiate segmented download with size |
+| `0x60/0x70` | segmented upload request, toggle dependent |
+| `0x00/0x10` | segmented download segment, toggle dependent |
 
-When `APP_USE_CAN_FD = 1`, extra bytes are appended:
+All SDO frames use an 8-byte CAN data field. Multi-byte values are
+little-endian. For NodeID 1, a valid `0x6040` write is:
 
-| Byte | Meaning |
+```text
+CAN ID: 0x601
+Data:   2B 40 60 00 06 00 00 00
+```
+
+`0x6040` is an `UNSIGNED16` object. The expedited download command must
+therefore be `0x2B`, and the value bytes are `06 00` for controlword
+`0x0006`. A `0x23` four-byte download or a frame with fewer than 8 CAN data
+bytes is rejected with abort code `0x06070010`.
+
+The expected successful response is:
+
+```text
+CAN ID: 0x581
+Data:   60 40 60 00 00 00 00 00
+```
+
+The following writes advance the CiA 402 state machine:
+
+```text
+2B 40 60 00 06 00 00 00   0x0006
+2B 40 60 00 07 00 00 00   0x0007
+2B 40 60 00 0F 00 00 00   0x000F
+```
+
+An incoming frame with COB-ID `0x300 + NodeID` is standard RPDO2 traffic.
+It is not a legacy telemetry frame. In strict mode the device never emits
+that identifier; TPDO2 uses `0x280 + NodeID` by default.
+
+Do not send `00 06` in bytes 4 and 5. That is the little-endian value
+`0x0600`, not `0x0006`, and the device intentionally does not swap it.
+
+Typical SDO abort responses are:
+
+| Abort code | Meaning in this firmware |
 | --- | --- |
-| `6` | node ID |
-| `7` | node mask (`0x0F`) |
-| `8` | FDF flag |
-| `9` | BRS flag |
+| `0x06070010` | Data length does not match the object |
+| `0x06090030` | CiA 402 value or state transition is invalid |
+| `0x06010002` | Object is unsupported or not writable |
 
-So:
+## 10. PDO Communication Parameters
 
-- classical CAN: `8 B`
-- CAN FD: `12 B`
+### 10.1 RPDO1
 
-Validity bits:
+Communication parameters:
 
-- bit0: `Rs` valid
-- bit1: `Ld` valid
-- bit2: `Lq` valid
-- bit3: `Ke` valid
+```text
+0x1400:01  COB-ID
+0x1400:02  Transmission type
+```
 
-### 8.3 Parameter result response
+Mapping parameters:
 
-Classical CAN:
+```text
+0x1600:00  number of mapped objects
+0x1600:01  mapping entry 1
+0x1600:02  mapping entry 2
+```
 
-- `0x22x`: `Rs`, `Ld`
-- `0x23x`: `Lq`, `Ke`
+Default mapping:
 
-CAN FD:
+```text
+0x1600:01 = 0x60400010  Controlword, 16 bits
+0x1600:02 = 0x60FF0020  Target velocity, 32 bits
+```
 
-- `0x22x`: `Rs`, `Ld`, `Lq`, `Ke` in one `16 B` frame
-- `0x23x` is not used for periodic parameter result output in CAN FD mode
+### 10.2 RPDO2
 
-## 9. Periodic Telemetry Mapping
+Communication parameters:
 
-The telemetry mapping is different for `CANFD` and classical `CAN`.
+```text
+0x1401:01  COB-ID
+0x1401:02  Transmission type
+```
 
-### 9.1 CAN FD telemetry mapping
+Mapping parameters:
 
-When `APP_USE_CAN_FD = 1`:
+```text
+0x1601:00  number of mapped objects
+0x1601:01  mapping entry 1
+0x1601:02  mapping entry 2
+```
 
-| Function code | Example SID for node `4` | Payload length | Meaning |
+Default mapping:
+
+```text
+0x1601:01 = 0x60600008  Modes of operation, 8 bits
+0x1601:02 = 0x60710010  Target torque, 16 bits
+```
+
+### 10.3 TPDO1
+
+Communication parameters:
+
+```text
+0x1800:01  COB-ID
+0x1800:02  Transmission type
+0x1800:03  Inhibit time, milliseconds
+0x1800:05  Event timer, milliseconds
+```
+
+Mapping parameters:
+
+```text
+0x1A00:00  number of mapped objects
+0x1A00:01  mapping entry 1
+0x1A00:02  mapping entry 2
+0x1A00:03  mapping entry 3
+0x1A00:04  mapping entry 4
+```
+
+Default mapping:
+
+```text
+0x1A00:01 = 0x60410010  Statusword, 16 bits
+0x1A00:02 = 0x606C0020  Actual velocity, 32 bits
+0x1A00:03 = 0x60610008  Mode display, 8 bits
+0x1A00:04 = 0x10010008  Error register, 8 bits
+```
+
+### 10.4 TPDO2
+
+Communication parameters:
+
+```text
+0x1801:01  COB-ID
+0x1801:02  Transmission type
+0x1801:03  Inhibit time, milliseconds
+0x1801:05  Event timer, milliseconds
+```
+
+Mapping parameters:
+
+```text
+0x1A01:00  number of mapped objects
+0x1A01:01  mapping entry 1
+0x1A01:02  mapping entry 2
+```
+
+Default mapping:
+
+```text
+0x1A01:01 = 0x60640020  Actual position, 32 bits
+0x1A01:02 = 0x607A0020  Target position, 32 bits
+```
+
+Mapping entry format:
+
+```text
+bits 31..16: object index
+bits 15..8 : sub-index
+bits 7..0  : mapped length in bits
+```
+
+PDO mapping changes should follow the CANopen sequence:
+
+1. Disable the PDO by setting bit 31 of its COB-ID.
+2. Set mapping count to zero.
+3. Write each mapping entry.
+4. Set the final mapping count.
+5. Configure the transmission type and timer parameters.
+6. Re-enable the PDO by clearing bit 31.
+
+## 11. CiA 402 Object Dictionary
+
+The motor-control core exposes the following CiA 402 objects:
+
+| Index | Object | Access | Current unit |
 | --- | --- | --- | --- |
-| `0x30` | `0x304` | `16 B` | FOC full data |
-| `0x31` | `0x314` | `8 B` | status |
-| `0x32` | `0x324` | `16 B` | speed + bus voltage + temperature |
-| `0x33` | `0x334` | `12 B` | temperature group |
+| `0x6040` | Controlword | read/write | bit mask |
+| `0x6041` | Statusword | read-only | bit mask |
+| `0x6060` | Modes of operation | read/write | CiA 402 mode |
+| `0x6061` | Modes display | read-only | CiA 402 mode |
+| `0x6064` | Position actual value | read-only | encoder counts |
+| `0x606C` | Velocity actual value | read-only | rpm |
+| `0x6071` | Target torque | read/write | mA |
+| `0x607A` | Target position | read/write | encoder counts |
+| `0x60FF` | Target velocity | read/write | rpm |
 
-#### `0x30x` FOC frame
+Communication objects currently exposed by the CAN layer include:
 
-Payload:
+```text
+0x1000 Device type
+0x1001 Error register
+0x1008 Device name
+0x1017 Heartbeat producer time
+0x1018 Identity (vendor, product, revision and serial entries)
+0x1400/0x1401 RPDO communication
+0x1600/0x1601 RPDO mapping
+0x1800/0x1801 TPDO communication
+0x1A00/0x1A01 TPDO mapping
+```
 
-| Byte | Meaning |
+## 12. Legacy Function-Code Protocol
+
+The older custom protocol remains available for diagnostics and backward
+compatibility. It uses the legacy identifier layout:
+
+```text
+SID = (function_code << 4) | (node_id & 0x0F)
+```
+
+Examples include:
+
+```text
+0x01  stop motor
+0x02  start motor
+0x06  set speed reference
+0x0A  start calibration
+0x0E  get node ID
+0x0F  set node ID
+```
+
+These commands should not be used as the standard CiA 402 interface. Standard
+CANopen masters must use the COB-IDs and object dictionary described above.
+
+The legacy response and telemetry function codes are available only when
+`APP_USE_LEGACY_CAN_PROTOCOL = 1U`:
+
+| Function code | Meaning |
 | --- | --- |
-| `0..3` | `refId` |
-| `4..7` | `refIq` |
-| `8..11` | `calcId` |
-| `12..15` | `calcIq` |
-
-#### `0x31x` status frame
-
-Payload:
-
-| Byte | Meaning |
-| --- | --- |
-| `0` | `g_axis.state` |
-| `1` | `g_axis.error` |
-| `2` | `g_axis.enCtrlMode` |
-| `3` | `raw_COMM_ID` |
-| `4..5` | `raw_TSENA` |
-| `6` | node ID |
-| `7` | pole pairs |
-
-#### `0x32x` speed / power frame
-
-Payload:
-
-| Byte | Meaning |
-| --- | --- |
-| `0..3` | `speedRef` |
-| `4..7` | `speedMeas` |
-| `8..11` | `busVoltage` |
-| `12..15` | `temp_TSENB_c` |
-
-#### `0x33x` temperature frame
-
-Payload:
-
-| Byte | Meaning |
-| --- | --- |
-| `0..3` | `temp_TSENC_c` |
-| `4..7` | `temp_TSENA_c` |
-| `8..11` | `temp_TSENB_c` |
-
-### 9.2 Classical CAN telemetry mapping
-
-When `APP_USE_CAN_FD = 0`:
-
-| Function code | Example SID for node `4` | Payload length | Meaning |
-| --- | --- | --- | --- |
-| `0x30` | `0x304` | `6 B` | status |
-| `0x31` | `0x314` | `8 B` | current reference |
-| `0x32` | `0x324` | `8 B` | current calculation |
-| `0x33` | `0x334` | `8 B` | speed |
-| `0x34` | `0x344` | `8 B` | bus voltage + TSENB |
-| `0x35` | `0x354` | `8 B` | TSENC + TSENA |
-
-#### `0x30x` status frame
-
-Payload:
-
-| Byte | Meaning |
-| --- | --- |
-| `0` | `g_axis.state` |
-| `1` | `g_axis.error` |
-| `2` | `g_axis.enCtrlMode` |
-| `3` | `raw_COMM_ID` |
-| `4..5` | `raw_TSENA` |
-
-#### `0x31x` current reference frame
-
-- `refId`
-- `refIq`
-
-#### `0x32x` current calculation frame
-
-- `calcId`
-- `calcIq`
-
-#### `0x33x` speed frame
-
-- `speedRef`
-- `speedMeas`
-
-#### `0x34x` bus / temperature B frame
-
-- `busVoltage`
-- `temp_TSENB_c`
-
-#### `0x35x` temperature frame
-
-- `temp_TSENC_c`
-- `temp_TSENA_c`
-
-## 10. Periodic Scheduler
-
-`CAN_Telemetry_Service1ms()` behavior:
-
-1. if TX queue is not empty, send one queued response frame and return
-2. if TX queue is empty, update periodic elapsed counters
-3. scan telemetry slots in configured order
-4. if a slot is due, build one frame, send it, clear its elapsed counter, and return
-
-Important point:
-
-- in one `1 ms` service call, at most one frame is sent
-
-### 10.1 Period configuration
-
-Current period constants:
-
-- current reference: `20 ms`
-- current calculation: `20 ms`
-- speed: `20 ms`
-- status: `100 ms`
-- bus / temperature group: `200 ms`
-- temperature slow group: `1000 ms`
-
-### 10.2 Actual slot usage
-
-CAN FD mode uses:
-
-- `0x30x` every `20 ms`
-- `0x32x` every `20 ms`
-- `0x31x` every `100 ms`
-- `0x33x` every `200 ms`
-
-Classical CAN mode uses:
-
-- `0x31x` every `20 ms`
-- `0x32x` every `20 ms`
-- `0x33x` every `20 ms`
-- `0x30x` every `100 ms`
-- `0x34x` every `200 ms`
-- `0x35x` every `1000 ms`
-
-## 11. ID Read / Write Behavior
-
-### 11.1 `GET_ID`
-
-Function code:
-
-- `0x0E`
-
-Targeted query:
-
-- send to `0x0Ex`
-
-Broadcast query:
-
-- send to `0x0E0`
-
-Reply:
-
-- response uses `0x20x`
-- response `extra` returns current node ID
-
-### 11.2 `SET_ID`
-
-Function code:
-
-- `0x0F`
-
-Payload:
-
-- `1 B` new node ID
-
-Behavior:
-
-1. validate node ID range
-2. save to flash
-3. reconfigure hardware RX filter to new node ID
-4. queue command status response
-
-## 12. Flash and Calibration
-
-Current flash-related functions:
-
-- `ParamId_SaveToFlash()`
-- `ParamId_LoadFromFlash()`
-- `ParamId_ClearFlash()`
-- `ParamId_RestoreFromFlashToAxis()`
-
-Flash content includes:
-
-- identified motor parameters
-- pole pairs
-- current control related parameters
-- CAN node ID
-
-Calibration-related commands:
-
-- `0x0A`: start calibration chain or parameter calibration
-- `0x0B`: stop parameter calibration
-- `0x0C`: read flash parameters
-- `0x0D`: clear flash
-
-Calibration state rules:
-
-- `0x0A` with mode `0` starts the base calibration chain
-- the base chain runs current offset calibration first, then encoder calibration
-- after the base chain completes, the axis returns to `IDLE`
-- `0x0A` with mode `5` starts parameter identification
-- parameter identification is only accepted from `IDLE`
-- `0x0B` stops parameter identification and returns to `IDLE`
-
-## 13. Practical Summary
-
-Current design summary:
-
-- node ID uses lower 4 bits of standard 11-bit ID
-- command function codes are fixed and shared by CAN / CAN FD
-- response function codes `0x20 ~ 0x23` are fixed
-- `0x21` is a response function code for parameter state, not a command
-- telemetry function codes differ by compile-time mode
-- CAN FD tries to pack same-type runtime data into fewer larger frames
-- classical CAN keeps split runtime telemetry frames
-- TX queue is always sent before periodic telemetry
-- broadcast `E0` is reserved for single-device ID discovery
-- current CAN FD timing is `500 kbps` arbitration + `2 Mbps` data
-
-## 14. Current Host Parsing Recommendation
-
-### 14.1 When `APP_USE_CAN_FD = 1`
-
-Monitor:
-
-- `0x20x`: command response
-- `0x21x`: parameter state response
-- `0x22x`: parameter result
-- `0x30x`: FOC
-- `0x31x`: status
-- `0x32x`: speed / power
-- `0x33x`: temperature
-
-### 14.2 When `APP_USE_CAN_FD = 0`
-
-Monitor:
-
-- `0x20x`
-- `0x21x`
-- `0x22x`
-- `0x23x`
-- `0x30x`
-- `0x31x`
-- `0x32x`
-- `0x33x`
-- `0x34x`
-- `0x35x`
-
-This document should be updated whenever one of the following changes:
-
-- function code allocation
-- telemetry payload layout
-- CAN / CAN FD mode mapping
-- command payload definitions
-- flash structure version
-- bit timing configuration
+| `0x20` | command status response |
+| `0x21` | parameter state response |
+| `0x22` | parameter result block 1 |
+| `0x23` | parameter result block 2 |
+| `0x30..0x35` | legacy periodic telemetry, layout depends on `APP_USE_CAN_FD` |
+
+The legacy identifier format masks the node ID to four bits. Therefore node
+IDs above 15 are valid for standard CANopen COB-IDs but cannot be addressed
+correctly through the legacy function-code path.
+
+## 13. Current Scope and Validation Status
+
+Implemented and source-reviewed:
+
+- standard NMT basics
+- heartbeat producer
+- SYNC reception
+- EMCY edge reporting
+- expedited and segmented SDO sessions
+- dynamic RPDO1/2 and TPDO1/2 mapping
+- PDO COB-ID, transmission type, inhibit time and event timer handling
+- CiA 402 velocity, torque and position objects
+
+Not yet covered as a complete CANopen product:
+
+- RPDO3/4 and TPDO3/4
+- heartbeat consumer supervision
+- full Node Guarding
+- all SDO domain-object storage use cases
+- complete CANopen conformance testing
+- hardware CANopen master interoperability testing
+
+The current host environment has no `arm-none-eabi-gcc` build tool or connected
+CANopen master. `canopen.c` and the shared CiA 402 core pass host-side C syntax
+validation in both strict and compatibility modes. The final acceptance test
+must still be performed on target hardware with a standard CANopen master.

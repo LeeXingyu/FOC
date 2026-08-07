@@ -1,0 +1,509 @@
+; LX_BLDC_CiA402.eds
+; Generated to match the current firmware implementation.
+; This EDS focuses on the objects and PDOs actually supported by the code.
+; Identity object 0x1018 exposes the standard four identity entries.
+
+[FileInfo]
+FileName=LX_BLDC_CiA402.eds
+FileVersion=1
+FileRevision=0
+EDSVersion=4.0
+Description=LX BLDC CiA402 CANopen Device
+CreationDate=08-06-2026
+CreationTime=00:00:00
+CreatedBy=Codex
+
+[DeviceInfo]
+VendorName=LX
+VendorNumber=0x00000001
+ProductName=LX BLDC CiA402 Drive
+ProductNumber=0x00000192
+RevisionNumber=0x00000001
+OrderCode=LX_BLDC_CIA402
+BaudRate_125=0
+BaudRate_250=0
+BaudRate_500=1
+BaudRate_1000=0
+SimpleBootUpMaster=1
+SimpleSlaveBootUp=1
+Granularity=8
+DynamicChannels=0
+
+[Comments]
+Lines=3
+Line1=Standard CANopen CiA402 EDS with RPDO1/RPDO2 and TPDO1/TPDO2 support.
+Line2=Firmware uses runtime node-ID based COB-IDs and dynamic PDO mapping.
+Line3=Legacy function-code CAN commands are optional and are not part of CANopen.
+
+[MandatoryObjects]
+SupportedObjects=4
+1=0x1000
+2=0x1001
+3=0x1017
+4=0x1018
+
+[OptionalObjects]
+SupportedObjects=18
+1=0x1008
+2=0x1400
+3=0x1401
+4=0x1600
+5=0x1601
+6=0x1800
+7=0x1801
+8=0x1A00
+9=0x1A01
+10=0x6040
+11=0x6041
+12=0x6060
+13=0x6061
+14=0x6064
+15=0x606C
+16=0x6071
+17=0x607A
+18=0x60FF
+
+[1000]
+ParameterName=Device Type
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x00020192
+PDOMapping=0
+
+[1001]
+ParameterName=Error Register
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=0x00
+PDOMapping=1
+
+[1008]
+ParameterName=Device Name
+ObjectType=0x7
+DataType=0x0009
+AccessType=ro
+DefaultValue="LX BLDC CiA402"
+PDOMapping=0
+
+[1017]
+ParameterName=Producer Heartbeat Time
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=1000
+PDOMapping=0
+LowLimit=0
+HighLimit=60000
+
+[1018]
+ParameterName=Identity Object
+ObjectType=0x9
+SubNumber=4
+
+[1018sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=4
+PDOMapping=0
+
+[1018sub1]
+ParameterName=Vendor ID
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x00000001
+PDOMapping=0
+
+[1018sub2]
+ParameterName=Product Code
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x00000192
+PDOMapping=0
+
+[1018sub3]
+ParameterName=Revision Number
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x00000001
+PDOMapping=0
+
+[1018sub4]
+ParameterName=Serial Number
+ObjectType=0x7
+DataType=0x0007
+AccessType=ro
+DefaultValue=0x00000000
+PDOMapping=0
+
+[1400]
+ParameterName=RPDO1 Communication Parameter
+ObjectType=0x9
+SubNumber=2
+
+[1400sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1400sub1]
+ParameterName=COB-ID used by RPDO1
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x00000201
+PDOMapping=0
+
+[1400sub2]
+ParameterName=Transmission Type
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+LowLimit=0
+HighLimit=255
+
+[1401]
+ParameterName=RPDO2 Communication Parameter
+ObjectType=0x9
+SubNumber=2
+
+[1401sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=2
+PDOMapping=0
+
+[1401sub1]
+ParameterName=COB-ID used by RPDO2
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x00000301
+PDOMapping=0
+
+[1401sub2]
+ParameterName=Transmission Type
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+LowLimit=0
+HighLimit=255
+
+[1600]
+ParameterName=RPDO1 Mapping
+ObjectType=0x8
+SubNumber=2
+
+[1600sub0]
+ParameterName=Number of Mapped Objects
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1600sub1]
+ParameterName=Mapped Object 1
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60400010
+PDOMapping=0
+
+[1600sub2]
+ParameterName=Mapped Object 2
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60FF0020
+PDOMapping=0
+
+[1601]
+ParameterName=RPDO2 Mapping
+ObjectType=0x8
+SubNumber=2
+
+[1601sub0]
+ParameterName=Number of Mapped Objects
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1601sub1]
+ParameterName=Mapped Object 1
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60600008
+PDOMapping=0
+
+[1601sub2]
+ParameterName=Mapped Object 2
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60710010
+PDOMapping=0
+
+[1800]
+ParameterName=TPDO1 Communication Parameter
+ObjectType=0x9
+SubNumber=5
+
+[1800sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=5
+PDOMapping=0
+
+[1800sub1]
+ParameterName=COB-ID used by TPDO1
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x00000181
+PDOMapping=0
+
+[1800sub2]
+ParameterName=Transmission Type
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+LowLimit=0
+HighLimit=255
+
+[1800sub3]
+ParameterName=Inhibit Time
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1800sub5]
+ParameterName=Event Timer
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=20
+PDOMapping=0
+
+[1801]
+ParameterName=TPDO2 Communication Parameter
+ObjectType=0x9
+SubNumber=5
+
+[1801sub0]
+ParameterName=Number of Entries
+ObjectType=0x7
+DataType=0x0005
+AccessType=ro
+DefaultValue=5
+PDOMapping=0
+
+[1801sub1]
+ParameterName=COB-ID used by TPDO2
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x00000281
+PDOMapping=0
+
+[1801sub2]
+ParameterName=Transmission Type
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=255
+PDOMapping=0
+LowLimit=0
+HighLimit=255
+
+[1801sub3]
+ParameterName=Inhibit Time
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=0
+PDOMapping=0
+
+[1801sub5]
+ParameterName=Event Timer
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=20
+PDOMapping=0
+
+[1A00]
+ParameterName=TPDO1 Mapping
+ObjectType=0x8
+SubNumber=4
+
+[1A00sub0]
+ParameterName=Number of Mapped Objects
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=4
+PDOMapping=0
+
+[1A00sub1]
+ParameterName=Mapped Object 1
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60410010
+PDOMapping=0
+
+[1A00sub2]
+ParameterName=Mapped Object 2
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x606C0020
+PDOMapping=0
+
+[1A00sub3]
+ParameterName=Mapped Object 3
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60610008
+PDOMapping=0
+
+[1A00sub4]
+ParameterName=Mapped Object 4
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x10010008
+PDOMapping=0
+
+[1A01]
+ParameterName=TPDO2 Mapping
+ObjectType=0x8
+SubNumber=2
+
+[1A01sub0]
+ParameterName=Number of Mapped Objects
+ObjectType=0x7
+DataType=0x0005
+AccessType=rw
+DefaultValue=2
+PDOMapping=0
+
+[1A01sub1]
+ParameterName=Mapped Object 1
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x60640020
+PDOMapping=0
+
+[1A01sub2]
+ParameterName=Mapped Object 2
+ObjectType=0x7
+DataType=0x0007
+AccessType=rw
+DefaultValue=0x607A0020
+PDOMapping=0
+
+[6040]
+ParameterName=Controlword
+ObjectType=0x7
+DataType=0x0006
+AccessType=rw
+DefaultValue=0x0000
+PDOMapping=1
+LowLimit=0
+HighLimit=65535
+
+[6041]
+ParameterName=Statusword
+ObjectType=0x7
+DataType=0x0006
+AccessType=ro
+DefaultValue=0x0000
+PDOMapping=1
+
+[6060]
+ParameterName=Modes of Operation
+ObjectType=0x7
+DataType=0x0002
+AccessType=rw
+DefaultValue=3
+PDOMapping=1
+LowLimit=-128
+HighLimit=127
+
+[6061]
+ParameterName=Modes of Operation Display
+ObjectType=0x7
+DataType=0x0002
+AccessType=ro
+DefaultValue=3
+PDOMapping=1
+
+[6064]
+ParameterName=Position Actual Value
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[606C]
+ParameterName=Velocity Actual Value
+ObjectType=0x7
+DataType=0x0003
+AccessType=ro
+DefaultValue=0
+PDOMapping=1
+
+[6071]
+ParameterName=Target Torque
+ObjectType=0x7
+DataType=0x0003
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+LowLimit=-32768
+HighLimit=32767
+
+[607A]
+ParameterName=Target Position
+ObjectType=0x7
+DataType=0x0003
+AccessType=rw
+DefaultValue=0
+PDOMapping=1
+
+[60FF]
+ParameterName=Target Velocity
+ObjectType=0x7
+DataType=0x0003
+AccessType=rw
+DefaultValue=0
+PDOMapping=1

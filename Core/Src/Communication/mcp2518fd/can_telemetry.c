@@ -283,6 +283,12 @@ void CAN_Telemetry_UpdateFromAdc(const ADC_Rule_Data_t *pAdcData)
 
 bool CAN_Telemetry_EnqueueFrame(uint16_t sid, const uint8_t *payload, uint8_t len)
 {
+#if !APP_USE_LEGACY_CAN_PROTOCOL
+    (void)sid;
+    (void)payload;
+    (void)len;
+    return false;
+#else
     CAN_Telemetry_Frame_t *slot;
     uint8_t copy_len = (len > APP_CAN_MAX_DATA_BYTES) ? APP_CAN_MAX_DATA_BYTES : len;
 
@@ -307,6 +313,7 @@ bool CAN_Telemetry_EnqueueFrame(uint16_t sid, const uint8_t *payload, uint8_t le
     }
     s_tx_queue_count++;
     return true;
+#endif
 }
 
 static uint8_t CAN_Telemetry_BuildCmdStatusPayload(uint16_t cmdSid,
@@ -344,6 +351,13 @@ static uint8_t CAN_Telemetry_BuildCmdStatusPayload(uint16_t cmdSid,
 
 void CAN_Telemetry_QueueCmdStatus(uint16_t cmdSid, uint8_t status, uint8_t extra, uint8_t rxLen, uint8_t nodeId)
 {
+#if !APP_USE_LEGACY_CAN_PROTOCOL
+    (void)cmdSid;
+    (void)status;
+    (void)extra;
+    (void)rxLen;
+    (void)nodeId;
+#else
     uint8_t payload[APP_CAN_MAX_DATA_BYTES];
     uint8_t payloadLen = CAN_Telemetry_BuildCmdStatusPayload(cmdSid, status, extra, rxLen, payload);
 
@@ -353,17 +367,25 @@ void CAN_Telemetry_QueueCmdStatus(uint16_t cmdSid, uint8_t status, uint8_t extra
     }
 
     (void)CAN_Telemetry_EnqueueFrame(CAN_Telemetry_BuildId(CAN_FC_RSP_CMD_STATUS, nodeId), payload, payloadLen);
+#endif
 }
 
 void CAN_Telemetry_RequestRuntimeParamSnapshot(void)
 {
+#if !APP_USE_LEGACY_CAN_PROTOCOL
+    return;
+#else
     CAN_Telemetry_QueueParamSnapshotCommon(MC_Calib_GetParamResult(),
                                           (uint8_t)MC_Calib_GetParamState(),
                                           MC_Get_Pole_Pairs());
+#endif
 }
 
 bool CAN_Telemetry_RequestFlashParamSnapshot(void)
 {
+#if !APP_USE_LEGACY_CAN_PROTOCOL
+    return false;
+#else
     ParamIdFlashData_t data;
 
     if (!ParamId_LoadFromFlash(&data))
@@ -375,6 +397,7 @@ bool CAN_Telemetry_RequestFlashParamSnapshot(void)
                                           (uint8_t)PARAM_ID_STATE_DONE,
                                           (uint8_t)data.pole_pairs);
     return true;
+#endif
 }
 
 static bool CAN_Telemetry_BuildPeriodicFrame(CanTelemetryFuncCode_t funcCode,
@@ -514,6 +537,9 @@ static bool CAN_Telemetry_BuildPeriodicFrame(CanTelemetryFuncCode_t funcCode,
 
 void CAN_Telemetry_Service1ms(void)
 {
+#if !APP_USE_LEGACY_CAN_PROTOCOL
+    return;
+#else
     CAN_Telemetry_Frame_t frameOut;
     uint8_t frame[APP_CAN_MAX_DATA_BYTES] = {0};
     uint8_t nodeId = ParamId_GetCanNodeId();
@@ -554,4 +580,5 @@ void CAN_Telemetry_Service1ms(void)
             return;
         }
     }
+#endif
 }

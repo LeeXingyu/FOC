@@ -202,8 +202,6 @@ void Communication_Task(void *argument)
 {
   /* USER CODE BEGIN Communication_Task */
   /* Infinite loop */
-  static uint8_t comm_period_div = 0U;
-
   if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
   {
     LAN9253_SetTaskHandle((void *)xTaskGetCurrentTaskHandle());
@@ -243,13 +241,14 @@ void Communication_Task(void *argument)
         g_comm_io2_irq_pending = 0U;
       }
 
-      comm_period_div++;
-      if (comm_period_div >= 5U)
-      {
-        comm_period_div = 0U;
-        //MCP2518FD_Service1ms();
-        //CAN_Telemetry_Service1ms();
-      }
+      /*
+       * The communication task is released every millisecond.  Keep both
+       * CANopen heartbeat/TPDO timing and the diagnostic queue on this
+       * service path; delaying it by a software divider changes all CANopen
+       * time units and breaks standard heartbeat supervision.
+       */
+      MCP2518FD_Service1ms();
+      CAN_Telemetry_Service1ms();
     }
     else if (g_system_comm_mode == COMM_PROTO_ETHERCAT)
     {

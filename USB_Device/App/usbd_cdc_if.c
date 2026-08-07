@@ -746,19 +746,10 @@ static void CDC_HandleCanLikeCommand(uint8_t func, uint8_t node, const uint8_t *
                     (mode == CIA402_MODE_CYCLIC_SYNC_VELOCITY) ||
                     (mode == CIA402_MODE_CYCLIC_SYNC_TORQUE))
                 {
-                    if ((mode == CIA402_MODE_PROFILE_POSITION) || (mode == CIA402_MODE_CYCLIC_SYNC_POSITION))
-                    {
-                        MC_Set_Control_Mode(CTRL_MODE_POSITION);
-                    }
-                    else if ((mode == CIA402_MODE_PROFILE_VELOCITY) || (mode == CIA402_MODE_CYCLIC_SYNC_VELOCITY))
-                    {
-                        MC_Set_Control_Mode(CTRL_MODE_SPEED);
-                    }
-                    else
-                    {
-                        MC_Set_Control_Mode(CTRL_MODE_TORQUE);
-                    }
-                    CDC_SendFormat("CIA402 CMD 0x%03X mode=%u\r\n", sid, mode);
+                    CDC_SendFormat(MC_Cia402_WriteObject(0x6060U, 0U, &mode, 1U) ?
+                                       "CIA402 CMD 0x%03X mode=%u\r\n" :
+                                       "CIA402 ERR 0x%03X mode\r\n",
+                                   sid, mode);
                 }
                 else
                 {
@@ -775,8 +766,15 @@ static void CDC_HandleCanLikeCommand(uint8_t func, uint8_t node, const uint8_t *
             {
                 float v;
                 memcpy(&v, payload, 4U);
-                MC_Set_Speed_Reference(v);
-                CDC_SendFormat("CIA402 CMD 0x%03X speed=%.3f\r\n", sid, (double)v);
+                {
+                    int32_t targetRpm = (int32_t)v;
+                    CDC_SendFormat(MC_Cia402_WriteObject(0x60FFU, 0U,
+                                                         (const uint8_t *)&targetRpm,
+                                                         4U) ?
+                                       "CIA402 CMD 0x%03X speed=%.3f\r\n" :
+                                       "CIA402 ERR 0x%03X speed\r\n",
+                                   sid, (double)v);
+                }
             }
             else
             {
@@ -787,7 +785,9 @@ static void CDC_HandleCanLikeCommand(uint8_t func, uint8_t node, const uint8_t *
             if (len == 2U)
             {
                 int16_t iq_mA = (int16_t)((uint16_t)payload[0] | ((uint16_t)payload[1] << 8));
-                if (MC_Set_Torque_Reference((float)iq_mA / 1000.0f) == MC_SUCCESS)
+                if (MC_Cia402_WriteObject(0x6071U, 0U,
+                                          (const uint8_t *)&iq_mA,
+                                          sizeof(iq_mA)))
                 {
                     CDC_SendFormat("CIA402 CMD 0x%03X torque=%d mA\r\n", sid, (int)iq_mA);
                 }

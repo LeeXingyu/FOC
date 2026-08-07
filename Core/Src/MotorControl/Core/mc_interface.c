@@ -12,6 +12,33 @@
 #include "pidregdqx_current.h"
 #include "Utils/Pid/pidreg_speed.h"
 #include <math.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef enum
+{
+	MC_CIA402_SWITCH_ON_DISABLED = 0U,
+	MC_CIA402_READY_TO_SWITCH_ON,
+	MC_CIA402_SWITCHED_ON,
+	MC_CIA402_OPERATION_ENABLED,
+	MC_CIA402_QUICK_STOP_ACTIVE,
+	MC_CIA402_FAULT
+} McCia402State_t;
+
+static McCia402State_t s_cia402_state = MC_CIA402_SWITCH_ON_DISABLED;
+static uint16_t s_cia402_controlword = 0U;
+static int8_t s_cia402_mode = CIA402_MODE_PROFILE_VELOCITY;
+static int32_t s_cia402_target_velocity = 0;
+static int16_t s_cia402_target_torque = 0;
+
+static bool MC_Cia402_IsAxisBusy(void)
+{
+	return (g_axis.state == AXIS_STATE_OFFSET_CALIB) ||
+		   (g_axis.state == AXIS_STATE_ENCODER_CALIB) ||
+		   (g_axis.state == AXIS_STATE_PARAM_CALIB) ||
+		   (g_axis.state == AXIS_STATE_CURRENT_AUTOTUNE) ||
+		   (g_axis.state == AXIS_STATE_SPEED_AUTOTUNE);
+}
 
 static uint8_t MC_PolePairsOrDefault(void)
 {
@@ -162,28 +189,185 @@ MC_RetStatus_t MC_Set_Torque_Reference(float fIqA)
 
 MC_RetStatus_t MC_Apply_Cia402_Controlword(uint16_t controlword)
 {
-	/*
-	 * Minimal CiA 402 behavior:
-	 * - bit0/1/2/3: enable sequence
-	 * - bit7: fault reset
-	 * We only map the sequence to existing start/stop logic.
-	 */
-	if ((controlword & (1U << 7)) != 0U)
+	uint16_t command = controlword & 0x008FU;
+	McCia402State_t previousState = s_cia402_state;
+	McCia402State_t nextState = s_cia402_state;
+	bool transitionValid = false;
+
+	if (g_axis.state == AXIS_STATE_FAULT_NOW ||
+		g_axis.state == AXIS_STATE_FAULT_OVER)
 	{
-		return MC_Fault_Reset();
+		s_cia402_state = MC_CIA402_FAULT;
 	}
 
-	if ((controlword & 0x000F) == 0x000F)
+	if (s_cia402_state == MC_CIA402_FAULT)
 	{
-		return MC_Start_Motor();
+		if ((controlword & 0x0080U) == 0U)
+		{
+			return MC_FAILED;
+		}
+		if (MC_Fault_Reset() != MC_SUCCESS)
+		{
+			return MC_FAILED;
+		}
+		s_cia402_state = MC_CIA402_SWITCH_ON_DISABLED;
+		s_cia402_controlword = controlword;
+		return MC_SUCCESS;
 	}
 
-	if ((controlword & 0x0006) == 0x0000)
+	switch (s_cia402_state)
 	{
-		return MC_Stop_Motor();
+		case MC_CIA402_SWITCH_ON_DISABLED:
+			if (command == 0x0000U)
+			{
+				transitionValid = true;
+			}
+			else if (command == 0x0006U)
+			{
+				nextState = MC_CIA402_READY_TO_SWITCH_ON;
+				transitionValid = true;
+			}
+			break;
+		case MC_CIA402_READY_TO_SWITCH_ON:
+			if (command == 0x0006U)
+			{
+				transitionValid = true;
+			}
+			else if (command == 0x0007U)
+			{
+				nextState = MC_CIA402_SWITCHED_ON;
+				transitionValid = true;
+			}
+			else if (command == 0x0000U)
+			{
+				nextState = MC_CIA402_SWITCH_ON_DISABLED;
+				transitionValid = true;
+			}
+			break;
+		case MC_CIA402_SWITCHED_ON:
+			if (command == 0x0007U)
+			{
+				transitionValid = true;
+			}
+			else if (command == 0x000FU)
+			{
+				nextState = MC_CIA402_OPERATION_ENABLED;
+				transitionValid = true;
+			}
+			else if (command == 0x0006U)
+			{
+				nextState = MC_CIA402_READY_TO_SWITCH_ON;
+				transitionValid = true;
+			}
+			else if (command == 0x0000U)
+			{
+				nextState = MC_CIA402_SWITCH_ON_DISABLED;
+				transitionValid = true;
+			}
+			break;
+		case MC_CIA402_OPERATION_ENABLED:
+			if ((command & 0x0003U) == 0U)
+			{
+				nextState = MC_CIA402_SWITCH_ON_DISABLED;
+				transitionValid = true;
+			}
+			else if ((controlword & 0x0004U) == 0U)
+			{
+				nextState = MC_CIA402_QUICK_STOP_ACTIVE;
+				transitionValid = true;
+			}
+			else if (command == 0x000FU)
+			{
+				transitionValid = true;
+			}
+			else if (command == 0x0007U)
+			{
+				nextState = MC_CIA402_SWITCHED_ON;
+				transitionValid = true;
+			}
+			else if (command == 0x0006U)
+			{
+				nextState = MC_CIA402_READY_TO_SWITCH_ON;
+				transitionValid = true;
+			}
+			break;
+		case MC_CIA402_QUICK_STOP_ACTIVE:
+			if (command == 0x000FU)
+			{
+				nextState = MC_CIA402_OPERATION_ENABLED;
+				transitionValid = true;
+			}
+			else if (command == 0x0007U)
+			{
+				nextState = MC_CIA402_SWITCHED_ON;
+				transitionValid = true;
+			}
+			else if (command == 0x0006U)
+			{
+				nextState = MC_CIA402_READY_TO_SWITCH_ON;
+				transitionValid = true;
+			}
+			else if (command == 0x0000U)
+			{
+				nextState = MC_CIA402_SWITCH_ON_DISABLED;
+				transitionValid = true;
+			}
+			break;
+		default:
+			break;
 	}
 
+	if (!transitionValid)
+	{
+		return MC_FAILED;
+	}
+
+	if (nextState == MC_CIA402_OPERATION_ENABLED &&
+		s_cia402_state != MC_CIA402_OPERATION_ENABLED)
+	{
+		bool motorAlreadyStarted = (g_axis.state == AXIS_STATE_RUN);
+
+		/*
+		 * A CiA 402 enable request is also valid while the application is
+		 * completing its startup calibration.  Do not restart or abort that
+		 * operation; the existing calibration flow will enter RUN when it
+		 * finishes.
+		 */
+		if (!motorAlreadyStarted && !MC_Cia402_IsAxisBusy() &&
+			(MC_Start_Motor() != MC_SUCCESS))
+		{
+			return MC_FAILED;
+		}
+	}
+	else if (((previousState == MC_CIA402_OPERATION_ENABLED) &&
+			  (nextState != MC_CIA402_OPERATION_ENABLED)) ||
+			 ((nextState == MC_CIA402_QUICK_STOP_ACTIVE) &&
+			  (previousState != MC_CIA402_QUICK_STOP_ACTIVE)) ||
+			 ((nextState == MC_CIA402_SWITCH_ON_DISABLED) &&
+			  (previousState != MC_CIA402_SWITCH_ON_DISABLED)))
+	{
+		/*
+		 * 0x0006 and 0x0007 are intermediate state transitions.  Calling
+		 * MC_Stop_Motor() for them would cancel a calibration that was
+		 * started before the CiA 402 sequence was completed.
+		 */
+		(void)MC_Stop_Motor();
+	}
+
+	s_cia402_controlword = controlword;
+	s_cia402_state = nextState;
 	return MC_SUCCESS;
+}
+
+void MC_Cia402_ResetState(void)
+{
+	s_cia402_state = MC_CIA402_SWITCH_ON_DISABLED;
+	s_cia402_controlword = 0U;
+	s_cia402_mode = CIA402_MODE_PROFILE_VELOCITY;
+	s_cia402_target_velocity = 0;
+	s_cia402_target_torque = 0;
+	(void)MC_Stop_Motor();
+	MC_Set_Control_Mode(CTRL_MODE_SPEED);
 }
 
 MC_RetStatus_t MC_Fault_Reset(void)
@@ -208,39 +392,228 @@ uint16_t MC_Get_Cia402_Statusword(void)
 {
 	uint16_t sw = 0U;
 
-	switch (g_axis.state)
+	if (g_axis.state == AXIS_STATE_FAULT_NOW ||
+		g_axis.state == AXIS_STATE_FAULT_OVER)
 	{
-		case AXIS_STATE_IDLE:
-			sw |= (1U << 0);
+		s_cia402_state = MC_CIA402_FAULT;
+	}
+
+	switch (s_cia402_state)
+	{
+		case MC_CIA402_SWITCH_ON_DISABLED:
+			sw = 0x0040U;
 			break;
-		case AXIS_STATE_RUN:
-			sw |= (1U << 0);
-			sw |= (1U << 1);
-			sw |= (1U << 2);
-			sw |= (1U << 4);
+		case MC_CIA402_READY_TO_SWITCH_ON:
+			sw = 0x0021U;
 			break;
-		case AXIS_STATE_FAULT_NOW:
-		case AXIS_STATE_FAULT_OVER:
-			sw |= (1U << 3);
+		case MC_CIA402_SWITCHED_ON:
+			sw = 0x0023U;
+			break;
+		case MC_CIA402_OPERATION_ENABLED:
+			sw = 0x0027U;
+			break;
+		case MC_CIA402_QUICK_STOP_ACTIVE:
+			sw = 0x0007U;
+			break;
+		case MC_CIA402_FAULT:
+			sw = 0x0008U;
 			break;
 		default:
 			break;
 	}
 
-	if (g_axis.enCtrlMode == CTRL_MODE_SPEED)
+	if (s_cia402_mode == CIA402_MODE_PROFILE_VELOCITY ||
+		s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_VELOCITY)
 	{
-		sw |= (1U << 10);
+		int32_t actualVelocity;
+		uint8_t polePairs = MC_PolePairsOrDefault();
+
+		actualVelocity = (int32_t)(FIXP30_toF(g_axis.speedCtrl.speedMeas_pu) *
+			FREQUENCY_SCALE * 60.0f / (float)polePairs);
+		if ((s_cia402_state == MC_CIA402_OPERATION_ENABLED) &&
+			(labs(actualVelocity - s_cia402_target_velocity) <= 10L))
+		{
+			sw |= (1U << 10);
+		}
 	}
-	else if (g_axis.enCtrlMode == CTRL_MODE_POSITION)
+	else if (s_cia402_mode == CIA402_MODE_PROFILE_POSITION ||
+			 s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_POSITION)
 	{
-		sw |= (1U << 11);
+		sw |= (1U << 12);
+		if (fabsf(g_axis.posCtrl.fPosRef -
+				  (float)(g_axis.posCtrl.iAbsRawPos - g_axis.posCtrl.iZeroAngle)) < 2.0f)
+		{
+			sw |= (1U << 10);
+		}
 	}
-	else if (g_axis.enCtrlMode == CTRL_MODE_TORQUE)
+	else if (s_cia402_mode == CIA402_MODE_PROFILE_TORQUE ||
+			 s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_TORQUE)
 	{
 		sw |= (1U << 8);
 	}
 
 	return sw;
+}
+
+int8_t MC_Cia402_GetMode(void)
+{
+	return s_cia402_mode;
+}
+
+uint16_t MC_Cia402_GetControlword(void)
+{
+	return s_cia402_controlword;
+}
+
+bool MC_Cia402_ReadObject(uint16_t index, uint8_t subIndex,
+						  uint8_t *value, uint8_t *size)
+{
+	int32_t actualVelocity;
+
+	if ((value == NULL) || (size == NULL) || (subIndex != 0U))
+	{
+		return false;
+	}
+	switch (index)
+	{
+		case 0x1001U:
+			value[0] = (g_axis.error == AXIS_ERROR_NONE) ? 0U : 1U;
+			*size = 1U;
+			return true;
+		case 0x6040U:
+			value[0] = (uint8_t)s_cia402_controlword;
+			value[1] = (uint8_t)(s_cia402_controlword >> 8);
+			*size = 2U;
+			return true;
+		case 0x6041U:
+		{
+			uint16_t statusword = MC_Get_Cia402_Statusword();
+			value[0] = (uint8_t)statusword;
+			value[1] = (uint8_t)(statusword >> 8);
+			*size = 2U;
+			return true;
+		}
+		case 0x6060U:
+		case 0x6061U:
+			value[0] = (uint8_t)s_cia402_mode;
+			*size = 1U;
+			return true;
+		case 0x60FFU:
+			(void)memcpy(value, &s_cia402_target_velocity, 4U);
+			*size = 4U;
+			return true;
+		case 0x606CU:
+			{
+				uint8_t polePairs = MC_Get_Pole_Pairs();
+				actualVelocity = (int32_t)(FIXP30_toF(g_axis.speedCtrl.speedMeas_pu) *
+					FREQUENCY_SCALE * 60.0f /
+					(float)((polePairs == 0U) ? 1U : polePairs));
+			}
+			(void)memcpy(value, &actualVelocity, 4U);
+			*size = 4U;
+			return true;
+		case 0x607AU:
+		{
+			int32_t targetPosition = (int32_t)g_axis.posCtrl.fPosRef;
+			(void)memcpy(value, &targetPosition, 4U);
+			*size = 4U;
+			return true;
+		}
+		case 0x6064U:
+		{
+			int32_t actualPosition = (int32_t)
+				(g_axis.posCtrl.iAbsRawPos - g_axis.posCtrl.iZeroAngle);
+			(void)memcpy(value, &actualPosition, 4U);
+			*size = 4U;
+			return true;
+		}
+		default:
+			return false;
+	}
+}
+
+bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
+						   const uint8_t *value, uint8_t size)
+{
+	int8_t mode;
+	int32_t targetVelocity;
+	int16_t targetTorque;
+
+	if ((value == NULL) || (subIndex != 0U))
+	{
+		return false;
+	}
+	switch (index)
+	{
+		case 0x6040U:
+			if (size != 2U)
+			{
+				return false;
+			}
+			return MC_Apply_Cia402_Controlword((uint16_t)value[0] |
+				((uint16_t)value[1] << 8)) == MC_SUCCESS;
+		case 0x6060U:
+			if (size != 1U)
+			{
+				return false;
+			}
+			mode = (int8_t)value[0];
+			if ((mode != CIA402_MODE_PROFILE_POSITION) &&
+				(mode != CIA402_MODE_PROFILE_VELOCITY) &&
+				(mode != CIA402_MODE_PROFILE_TORQUE) &&
+				(mode != CIA402_MODE_CYCLIC_SYNC_POSITION) &&
+				(mode != CIA402_MODE_CYCLIC_SYNC_VELOCITY) &&
+				(mode != CIA402_MODE_CYCLIC_SYNC_TORQUE))
+			{
+				return false;
+			}
+			s_cia402_mode = mode;
+			if ((mode == CIA402_MODE_PROFILE_POSITION) ||
+				(mode == CIA402_MODE_CYCLIC_SYNC_POSITION))
+			{
+				MC_Set_Control_Mode(CTRL_MODE_POSITION);
+			}
+			else if ((mode == CIA402_MODE_PROFILE_TORQUE) ||
+					 (mode == CIA402_MODE_CYCLIC_SYNC_TORQUE))
+			{
+				MC_Set_Control_Mode(CTRL_MODE_TORQUE);
+			}
+			else
+			{
+				MC_Set_Control_Mode(CTRL_MODE_SPEED);
+			}
+			return true;
+		case 0x60FFU:
+			if (size != 4U)
+			{
+				return false;
+			}
+			(void)memcpy(&targetVelocity, value, 4U);
+			s_cia402_target_velocity = targetVelocity;
+			MC_Set_Speed_Reference((float)targetVelocity);
+			return true;
+		case 0x6071U:
+			if (size != 2U)
+			{
+				return false;
+			}
+			(void)memcpy(&targetTorque, value, 2U);
+			s_cia402_target_torque = targetTorque;
+			return MC_Set_Torque_Reference((float)targetTorque / 1000.0f) == MC_SUCCESS;
+		case 0x607AU:
+			if (size != 4U)
+			{
+				return false;
+			}
+			{
+				int32_t targetPosition;
+				(void)memcpy(&targetPosition, value, 4U);
+				g_axis.posCtrl.fPosRef = (float)targetPosition;
+			}
+			return true;
+		default:
+			return false;
+	}
 }
 
 uint8_t MC_Get_Pole_Pairs(void)
