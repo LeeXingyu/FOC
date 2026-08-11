@@ -2003,6 +2003,7 @@ void CurrAutoTune_Handle(void)
             printf("[AUTOTUNE] encoder zero committed: raw=%lu, currentRaw=%lu\n",
                    (unsigned long)g_axis.posCtrl.uOffsetAngleRaw,
                    (unsigned long)g_axis.fbdk.uAngleRaw);
+            g_axis.posCtrl.bResetFlag = false;
             s_runtime.stageTick = 0U;
             LL_TIM_ClearFlag_UPDATE(TIM1);
             g_rs_ident.state = CURR_AUTOTUNE_RECOVER;

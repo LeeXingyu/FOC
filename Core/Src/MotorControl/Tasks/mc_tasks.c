@@ -335,6 +335,9 @@ void Offset_Encoder_Handle()
 		PID_Reset(&g_axis.currCtrl.pidId, 0.0f);
 		PID_Reset(&g_axis.currCtrl.pidIq, 0.0f);
 		g_axis.posCtrl.uOffsetAngleRawNative = Get_Angle_RawNative();
+		g_axis.posCtrl.iZeroAngle = (int32_t)g_axis.posCtrl.uOffsetAngleRawNative;
+		g_axis.posCtrl.bResetFlag = false;
+		g_axis.posCtrl.uCircle = 0U;
 		g_axis.posCtrl.uCalibCount = 0;
 		g_axis.posCtrl.bCalibFlag = true;
 		MC_Set_Speed_Reference(0.0f);

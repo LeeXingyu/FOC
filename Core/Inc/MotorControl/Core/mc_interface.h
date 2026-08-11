@@ -99,6 +99,8 @@ bool MC_Cia402Ext_WriteObject(uint16_t index, uint8_t subIndex,
                               const uint8_t *value, uint8_t size);
 int8_t MC_Cia402_GetMode(void);
 uint16_t MC_Cia402_GetControlword(void);
+void MC_Cia402_OnSync(uint8_t syncCounter);
+void MC_Cia402_Service1ms(bool canopenOperational);
 
 /**
   * @brief  CiA 402 fault reset

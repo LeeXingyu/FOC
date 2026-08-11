@@ -214,7 +214,7 @@ Common abort meanings in this firmware:
 
 | PDO | Objects |
 | --- | --- |
-| RPDO1 | `0x6040:00`, `0x60FF:00` |
+| RPDO1 | `0x6040:00`, `0x607A:00` |
 | RPDO2 | `0x6060:00`, `0x6071:00` |
 | RPDO3 | configurable |
 | RPDO4 | configurable |
@@ -252,6 +252,10 @@ Current code behavior:
 - TPDO3 and TPDO4 are sent through dynamic communication and mapping objects
 - synchronous transmission types `1..240` are sent on SYNC reception
 - event-driven types `254` and `255` are sent from the 1 ms service
+- in CSP, `0x607A` written by RPDO/SDO is latched and becomes active only on the
+  next SYNC edge
+- in PP, `0x607A` updates the profile-position target immediately and continues
+  to use the internal trajectory planner
 
 ## 10. CiA 402 Relation
 

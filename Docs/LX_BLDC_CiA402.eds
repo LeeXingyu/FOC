@@ -386,7 +386,7 @@ ParameterName=Mapped Object 2
 ObjectType=0x7
 DataType=0x0007
 AccessType=rw
-DefaultValue=0x60FF0020
+DefaultValue=0x607A0020
 PDOMapping=0
 
 [1601]

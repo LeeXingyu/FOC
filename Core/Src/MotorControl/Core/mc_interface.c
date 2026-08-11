@@ -30,6 +30,13 @@ static uint16_t s_cia402_controlword = 0U;
 static int8_t s_cia402_mode = CIA402_MODE_PROFILE_VELOCITY;
 static int32_t s_cia402_target_velocity = 0;
 static int16_t s_cia402_target_torque = 0;
+static int32_t s_cia402_target_position = 0;
+static bool s_cia402_csp_target_pending = false;
+static bool s_cia402_csp_target_received = false;
+static uint16_t s_cia402_sync_timeout_ms = 100U;
+static uint16_t s_cia402_sync_elapsed_ms = 0U;
+static bool s_cia402_sync_seen = false;
+static bool s_cia402_sync_timeout_active = false;
 static uint32_t s_cia402_profile_velocity = 0U;
 static uint32_t s_cia402_profile_acceleration = 0U;
 static uint32_t s_cia402_profile_deceleration = 0U;
@@ -55,6 +62,50 @@ static uint8_t MC_PolePairsOrDefault(void)
 	}
 
 	return g_axis.uPolePairs;
+}
+
+static int32_t MC_Cia402_GetActualPositionCounts(void)
+{
+	return (int32_t)(g_axis.posCtrl.iAbsRawPos - g_axis.posCtrl.iZeroAngle);
+}
+
+static bool MC_Cia402_UsesTrajectory(int8_t mode)
+{
+	return (mode == CIA402_MODE_PROFILE_POSITION);
+}
+
+static bool MC_Cia402_IsCspMode(void)
+{
+	return (s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_POSITION);
+}
+
+static bool MC_Cia402_CspReadyToStart(void)
+{
+	return (!MC_Cia402_IsCspMode()) || s_cia402_csp_target_received;
+}
+
+static void MC_Cia402_ResetSyncWatchdog(void)
+{
+	s_cia402_sync_elapsed_ms = 0U;
+	s_cia402_sync_seen = false;
+	s_cia402_sync_timeout_active = false;
+}
+
+static void MC_Cia402_HoldCurrentPosition(void)
+{
+	const float currentPosition = (float)MC_Cia402_GetActualPositionCounts();
+
+	g_axis.posCtrl.fPosMeas = currentPosition;
+	g_axis.posCtrl.fPosRef = currentPosition;
+	g_axis.posCtrl.traj.inited = false;
+}
+
+static void MC_Cia402_HandleSyncTimeout(void)
+{
+	MC_Cia402_HoldCurrentPosition();
+	s_cia402_csp_target_pending = false;
+	s_cia402_csp_target_received = false;
+	s_cia402_sync_timeout_active = true;
 }
 
 /**
@@ -340,7 +391,14 @@ MC_RetStatus_t MC_Apply_Cia402_Controlword(uint16_t controlword)
 		 * operation; the existing calibration flow will enter RUN when it
 		 * finishes.
 		 */
-		if (!motorAlreadyStarted && !MC_Cia402_IsAxisBusy() &&
+		if (MC_Cia402_IsCspMode())
+		{
+			MC_Cia402_HoldCurrentPosition();
+		}
+
+		if (!motorAlreadyStarted &&
+			MC_Cia402_CspReadyToStart() &&
+			!MC_Cia402_IsAxisBusy() &&
 			(MC_Start_Motor() != MC_SUCCESS))
 		{
 			return MC_FAILED;
@@ -373,6 +431,10 @@ void MC_Cia402_ResetState(void)
 	s_cia402_mode = CIA402_MODE_PROFILE_VELOCITY;
 	s_cia402_target_velocity = 0;
 	s_cia402_target_torque = 0;
+	s_cia402_target_position = 0;
+	s_cia402_csp_target_pending = false;
+	s_cia402_csp_target_received = false;
+	MC_Cia402_ResetSyncWatchdog();
 	s_cia402_profile_velocity = 0U;
 	s_cia402_profile_acceleration = 0U;
 	s_cia402_profile_deceleration = 0U;
@@ -381,6 +443,9 @@ void MC_Cia402_ResetState(void)
 	s_cia402_following_error_actual = 0;
 	(void)MC_Stop_Motor();
 	MC_Set_Control_Mode(CTRL_MODE_SPEED);
+	g_axis.posCtrl.traj.bEnable = false;
+	g_axis.posCtrl.traj.inited = false;
+	g_axis.posCtrl.fPosRef = (float)MC_Cia402_GetActualPositionCounts();
 }
 
 MC_RetStatus_t MC_Fault_Reset(void)
@@ -453,10 +518,16 @@ uint16_t MC_Get_Cia402_Statusword(void)
 			 s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_POSITION)
 	{
 		sw |= (1U << 12);
-		if (fabsf(g_axis.posCtrl.fPosRef -
-				  (float)(g_axis.posCtrl.iAbsRawPos - g_axis.posCtrl.iZeroAngle)) < 2.0f)
 		{
-			sw |= (1U << 10);
+			float posError = fabsf(g_axis.posCtrl.fPosRef -
+				(float)(g_axis.posCtrl.iAbsRawPos - g_axis.posCtrl.iZeroAngle));
+			float posWindow = (s_cia402_following_error_window > 0U) ?
+				(float)s_cia402_following_error_window : 2.0f;
+
+			if (posError <= posWindow)
+			{
+				sw |= (1U << 10);
+			}
 		}
 	}
 	else if (s_cia402_mode == CIA402_MODE_PROFILE_TORQUE ||
@@ -466,6 +537,52 @@ uint16_t MC_Get_Cia402_Statusword(void)
 	}
 
 	return sw;
+}
+
+void MC_Cia402_OnSync(uint8_t syncCounter)
+{
+	(void)syncCounter;
+
+	s_cia402_sync_elapsed_ms = 0U;
+	s_cia402_sync_seen = true;
+	s_cia402_sync_timeout_active = false;
+
+	if (s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_POSITION)
+	{
+		g_axis.posCtrl.fPosMeas = (float)MC_Cia402_GetActualPositionCounts();
+		if (s_cia402_csp_target_pending)
+		{
+			g_axis.posCtrl.fPosRef = (float)s_cia402_target_position;
+			s_cia402_csp_target_pending = false;
+		}
+	}
+	else if (s_cia402_mode == CIA402_MODE_PROFILE_POSITION)
+	{
+		g_axis.posCtrl.fPosMeas = (float)MC_Cia402_GetActualPositionCounts();
+	}
+}
+
+void MC_Cia402_Service1ms(bool canopenOperational)
+{
+	if (!MC_Cia402_IsCspMode() ||
+		!canopenOperational ||
+		(s_cia402_state != MC_CIA402_OPERATION_ENABLED))
+	{
+		MC_Cia402_ResetSyncWatchdog();
+		return;
+	}
+
+	if (s_cia402_sync_elapsed_ms < 0xFFFFU)
+	{
+		s_cia402_sync_elapsed_ms++;
+	}
+
+	if (!s_cia402_sync_timeout_active &&
+		(s_cia402_sync_seen || s_cia402_csp_target_pending || s_cia402_csp_target_received) &&
+		(s_cia402_sync_elapsed_ms >= s_cia402_sync_timeout_ms))
+	{
+		MC_Cia402_HandleSyncTimeout();
+	}
 }
 
 int8_t MC_Cia402_GetMode(void)
@@ -626,7 +743,7 @@ bool MC_Cia402_ReadObject(uint16_t index, uint8_t subIndex,
 			{
 				return false;
 			}
-			int32_t targetPosition = (int32_t)g_axis.posCtrl.fPosRef;
+			int32_t targetPosition = s_cia402_target_position;
 			(void)memcpy(value, &targetPosition, 4U);
 			*size = 4U;
 			return true;
@@ -696,15 +813,39 @@ bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
 				(mode == CIA402_MODE_CYCLIC_SYNC_POSITION))
 			{
 				MC_Set_Control_Mode(CTRL_MODE_POSITION);
+				g_axis.posCtrl.traj.bEnable = MC_Cia402_UsesTrajectory(mode);
+				g_axis.posCtrl.traj.inited = false;
+				if (mode == CIA402_MODE_CYCLIC_SYNC_POSITION)
+				{
+					MC_Cia402_HoldCurrentPosition();
+					s_cia402_csp_target_pending = false;
+					s_cia402_csp_target_received = false;
+					MC_Cia402_ResetSyncWatchdog();
+				}
+				else
+				{
+					g_axis.posCtrl.fPosRef = (float)s_cia402_target_position;
+					s_cia402_csp_target_pending = false;
+					s_cia402_csp_target_received = false;
+					MC_Cia402_ResetSyncWatchdog();
+				}
 			}
 			else if ((mode == CIA402_MODE_PROFILE_TORQUE) ||
 					 (mode == CIA402_MODE_CYCLIC_SYNC_TORQUE))
 			{
 				MC_Set_Control_Mode(CTRL_MODE_TORQUE);
+				g_axis.posCtrl.traj.bEnable = false;
+				s_cia402_csp_target_pending = false;
+				s_cia402_csp_target_received = false;
+				MC_Cia402_ResetSyncWatchdog();
 			}
 			else
 			{
 				MC_Set_Control_Mode(CTRL_MODE_SPEED);
+				g_axis.posCtrl.traj.bEnable = false;
+				s_cia402_csp_target_pending = false;
+				s_cia402_csp_target_received = false;
+				MC_Cia402_ResetSyncWatchdog();
 			}
 			return true;
 		case 0x60FFU:
@@ -813,7 +954,29 @@ bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
 			{
 				int32_t targetPosition;
 				(void)memcpy(&targetPosition, value, 4U);
-				g_axis.posCtrl.fPosRef = (float)targetPosition;
+				s_cia402_target_position = targetPosition;
+				if (s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_POSITION)
+				{
+					s_cia402_csp_target_received = true;
+					s_cia402_csp_target_pending = true;
+					s_cia402_sync_timeout_active = false;
+
+					if ((s_cia402_state == MC_CIA402_OPERATION_ENABLED) &&
+						(g_axis.state != AXIS_STATE_RUN) &&
+						!MC_Cia402_IsAxisBusy())
+					{
+						if (MC_Start_Motor() != MC_SUCCESS)
+						{
+							return false;
+						}
+					}
+				}
+				else
+				{
+					g_axis.posCtrl.fPosRef = (float)targetPosition;
+					g_axis.posCtrl.traj.inited = false;
+					s_cia402_csp_target_pending = false;
+				}
 			}
 			return true;
 		default:

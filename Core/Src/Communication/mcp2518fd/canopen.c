@@ -45,7 +45,7 @@ static uint8_t s_canopen_tpdo2_transmission = 0xFFU;
 static uint8_t s_canopen_tpdo2_map_count = 2U;
 static AxisError_t s_canopen_last_error = AXIS_ERROR_NONE;
 static uint8_t s_canopen_sync_counter = 0U;
-static uint32_t s_canopen_rpdo1_mapping[2] = {0x60400010UL, 0x60FF0020UL};
+static uint32_t s_canopen_rpdo1_mapping[2] = {0x60400010UL, 0x607A0020UL};
 static uint32_t s_canopen_tpdo1_mapping[4] = {
     0x60410010UL, 0x606C0020UL, 0x60610008UL, 0x10010008UL
 };
@@ -1641,6 +1641,7 @@ static bool CanOpen_HandleStandardFrame(uint16_t sid, const uint8_t *data,
         {
             s_canopen_sync_counter++;
         }
+        MC_Cia402_OnSync(s_canopen_sync_counter);
         if (s_canopen_nmt_state == CANOPEN_NMT_OPERATIONAL &&
             (s_canopen_tpdo1_transmission >= 1U) &&
             (s_canopen_tpdo1_transmission <= 240U))
@@ -2407,7 +2408,7 @@ void CANFD_INIT(void)
     s_canopen_rpdo2_map_count = 2U;
     s_canopen_tpdo2_map_count = 2U;
     s_canopen_rpdo1_mapping[0] = 0x60400010UL;
-    s_canopen_rpdo1_mapping[1] = 0x60FF0020UL;
+    s_canopen_rpdo1_mapping[1] = 0x607A0020UL;
     s_canopen_tpdo1_mapping[0] = 0x60410010UL;
     s_canopen_tpdo1_mapping[1] = 0x606C0020UL;
     s_canopen_tpdo1_mapping[2] = 0x60610008UL;
@@ -2610,6 +2611,7 @@ void MCP2518FD_Service1ms(void)
 
     if (s_canopen_nmt_state == CANOPEN_NMT_OPERATIONAL)
     {
+        MC_Cia402_Service1ms(true);
         s_canopen_tpdo_elapsed_ms++;
         {
             uint16_t period = (s_canopen_tpdo1_event_ms == 0U) ?
@@ -2692,6 +2694,10 @@ void MCP2518FD_Service1ms(void)
                 }
             }
         }
+    }
+    else
+    {
+        MC_Cia402_Service1ms(false);
     }
 }
 

@@ -27,6 +27,13 @@ CANopen SDO/PDO and CDC `cia402` commands share the same object dictionary and
 state-machine implementation. This means object access behavior is intended to
 be transport-independent.
 
+For position modes the runtime behavior is intentionally split:
+
+- Profile Position updates `0x607A` immediately and keeps using the internal
+  trajectory planner.
+- Cyclic Synchronous Position stores the newest `0x607A` command and applies it
+  only when the CANopen SYNC path calls `MC_Cia402_OnSync()`.
+
 ## 2. Current CiA 402 Scope
 
 The firmware now exposes two layers:
@@ -108,10 +115,10 @@ The implementation currently generates the following commonly used bits:
 
 | Value | Mode | Internal mapping |
 | --- | --- | --- |
-| `1` | Profile Position | `CTRL_MODE_POSITION` |
+| `1` | Profile Position | `CTRL_MODE_POSITION` + internal trajectory planner |
 | `3` | Profile Velocity | `CTRL_MODE_SPEED` |
 | `4` | Profile Torque | `CTRL_MODE_TORQUE` |
-| `8` | Cyclic Synchronous Position | `CTRL_MODE_POSITION` |
+| `8` | Cyclic Synchronous Position | `CTRL_MODE_POSITION` + target latched on SYNC |
 | `9` | Cyclic Synchronous Velocity | `CTRL_MODE_SPEED` |
 | `10` | Cyclic Synchronous Torque | `CTRL_MODE_TORQUE` |
 
@@ -133,7 +140,7 @@ These objects already participate in the active control or feedback path:
 | `0x606C` | Velocity actual value | ro | current speed feedback in rpm |
 | `0x6071` | Target torque | rw | torque/current reference |
 | `0x6072` | Max torque | rw | torque limit parameter |
-| `0x607A` | Target position | rw | position reference |
+| `0x607A` | Target position | rw | PP: immediate profile target; CSP: pending target latched on SYNC |
 | `0x6081` | Profile velocity | rw | profile velocity parameter |
 | `0x6083` | Profile acceleration | rw | mapped to speed ramp behavior |
 | `0x6084` | Profile deceleration | rw | profile deceleration parameter |
@@ -174,7 +181,7 @@ placeholder interface for future functional completion.
 | `0x6060` | mode routing to existing control modes |
 | `0x60FF` | `MC_Set_Speed_Reference()` |
 | `0x6071` | `MC_Set_Torque_Reference()` |
-| `0x607A` | position reference into existing position controller |
+| `0x607A` | PP: immediate profile-position target; CSP: pending target latched on SYNC |
 | `0x6064` | position feedback from axis estimator / encoder path |
 | `0x606C` | speed feedback from axis estimator |
 | `0x6077/0x6078` | actual torque/current style feedback from FOC current loop |
@@ -249,7 +256,7 @@ Default PDO layout:
 
 | PDO | Default COB-ID | Default mapping |
 | --- | --- | --- |
-| RPDO1 | `0x200 + NodeID` | `0x6040:00` 16b, `0x60FF:00` 32b |
+| RPDO1 | `0x200 + NodeID` | `0x6040:00` 16b, `0x607A:00` 32b |
 | RPDO2 | `0x300 + NodeID` | `0x6060:00` 8b, `0x6071:00` 16b |
 | RPDO3 | `0x400 + NodeID` | configurable via `0x1402/0x1602` |
 | RPDO4 | `0x500 + NodeID` | configurable via `0x1403/0x1603` |

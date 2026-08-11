@@ -132,6 +132,7 @@ static void SpeedPos_ResetCircleHistory(uint32_t rawNative)
     s_absEncoderNative = (int64_t)rawNative;
     s_prevCircleRawNative = rawNative;
     s_circleHistoryValid = true;
+    g_axis.posCtrl.iAbsRawPos = (int64_t)rawNative;
 }
 
 static void SpeedPos_ResetSpeedHistory(uint32_t rawNative)
@@ -245,13 +246,19 @@ void Circle_Update(void)
     if (!g_axis.posCtrl.bCalibFlag || (counts <= 1U))
     {
         SpeedPos_ResetCircleHistory(rawNative);
+        g_axis.posCtrl.bResetFlag = false;
+        g_axis.posCtrl.iAbsRawPos = (int64_t)rawNative;
+        g_axis.posCtrl.uCircle = 0U;
         g_axis.fbdk.uCircle = 0U;
         return;
     }
 
-    if (!s_circleHistoryValid)
+    if (!g_axis.posCtrl.bResetFlag || !s_circleHistoryValid)
     {
         SpeedPos_ResetCircleHistory(rawNative);
+        g_axis.posCtrl.bResetFlag = true;
+        g_axis.posCtrl.iAbsRawPos = (int64_t)rawNative;
+        g_axis.posCtrl.uCircle = 0U;
         g_axis.fbdk.uCircle = 0U;
         return;
     }
@@ -259,23 +266,26 @@ void Circle_Update(void)
     delta = SpeedPos_SignedDelta(rawNative, s_prevCircleRawNative, counts);
     s_absEncoderNative += (int64_t)delta;
     s_prevCircleRawNative = rawNative;
+    g_axis.posCtrl.iAbsRawPos = s_absEncoderNative;
 
-    if (g_axis.posCtrl.uOffsetAngleRawNative < counts)
+    if (g_axis.posCtrl.iZeroAngle != -1)
     {
-        zeroAdjusted = s_absEncoderNative - (int64_t)g_axis.posCtrl.uOffsetAngleRawNative;
+        zeroAdjusted = g_axis.posCtrl.iAbsRawPos - (int64_t)g_axis.posCtrl.iZeroAngle;
         if (zeroAdjusted >= 0)
         {
-            g_axis.fbdk.uCircle = (uint16_t)SpeedPos_FloorDiv(zeroAdjusted, (int64_t)counts);
+            g_axis.posCtrl.uCircle = (uint16_t)SpeedPos_FloorDiv(zeroAdjusted, (int64_t)counts);
         }
         else
         {
-            g_axis.fbdk.uCircle = 0U;
+            g_axis.posCtrl.uCircle = 0U;
         }
     }
     else
     {
-        g_axis.fbdk.uCircle = 0U;
+        g_axis.posCtrl.uCircle = 0U;
     }
+
+    g_axis.fbdk.uCircle = g_axis.posCtrl.uCircle;
 }
 
 void Sensor_Update_Kalman(void)
@@ -564,6 +574,10 @@ void SpeedPos_ResetEstimator(void)
     s_pllAnglePu = 0.0f;
     s_pllFreqHz = 0.0f;
     s_pllSpeedFilteredRpm = 0.0f;
+    g_axis.posCtrl.bResetFlag = false;
+    g_axis.posCtrl.iAbsRawPos = (int64_t)rawNative;
+    g_axis.posCtrl.uCircle = 0U;
+    g_axis.fbdk.uCircle = 0U;
 
     if (counts > 1U)
     {
