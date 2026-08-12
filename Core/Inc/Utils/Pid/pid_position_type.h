@@ -10,16 +10,21 @@
 
 #include "encoder.h"
 
-/* T型轨迹规划相关换算 */
-#define ENC_COUNTS_PER_REV   ENCODER_COUNT
+/* Unified position-loop scaling for MT6835 21-bit angle counts. */
+#ifndef ENC_COUNTS_PER_REV
+#define ENC_COUNTS_PER_REV   2097152UL
+#endif
 
-/* 转换: RPM -> counts/ms */
+/* Convert raw counts into the same 16-bit-equivalent scale used by the gains. */
+#define ENCODER_16BIT_SCALE  ((float)ENC_COUNTS_PER_REV / 65536.0f)
+
+/* RPM -> counts/ms */
 #define RPM_TO_COUNTS_MS(rpm)    ((rpm) * ENC_COUNTS_PER_REV / 60000.0f)
-/* 转换: RPM/s -> (counts/ms)/调用 */
+/* RPM/s -> (counts/ms)/call */
 #define RPMPS_TO_ACCEL(a)        ((a) * ENC_COUNTS_PER_REV / 60000000.0f)
 #define COUNTS_MS_TO_RPM(v)      ((v) * 60000.0f / ENC_COUNTS_PER_REV)
-#define TRAJ_DEFAULT_VEL_MAX_RPM  (250.0f)
-#define TRAJ_DEFAULT_ACC_RPMPS    (100.0f)
+#define TRAJ_DEFAULT_VEL_MAX_RPM  (80.0f)
+#define TRAJ_DEFAULT_ACC_RPMPS    (20.0f)
 
 typedef struct {
     float pos_ref;    /* planned position reference   [encoder counts] */

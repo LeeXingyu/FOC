@@ -24,7 +24,7 @@ static void Position_TrajUpdate_T(TrajPlanner_t *pTrajPlanner,
     }
 
     float fError = (float)iTargetPosition - pTrajPlanner->pos_ref;
-    float fError16 = fError / (float)ENC_COUNTS_PER_REV;
+    float fError16 = fError / (float)ENCODER_16BIT_SCALE;
 
     if (fabsf(fError16) < POSITION_TRAJ_DONE_COUNT)
     {
@@ -89,7 +89,7 @@ float Pid_Position_Run(PosCtrl_t *pPosCtrl)
     int64_t iTargetPosition = (int64_t)pPosCtrl->fPosRef;
     int64_t iMeasuredAngle = pPosCtrl->iAbsRawPos - pPosCtrl->iZeroAngle;
     int64_t iError = iTargetPosition - iMeasuredAngle;
-    float fTargetError16 = (float)iError / (float)ENC_COUNTS_PER_REV;
+    float fTargetError16 = (float)iError / (float)ENCODER_16BIT_SCALE;
     float fAbsTargetError16 = fabsf(fTargetError16);
     float fPositionPeriod = 1.0f / (float)SPEED_CONTROL_RATE;
 

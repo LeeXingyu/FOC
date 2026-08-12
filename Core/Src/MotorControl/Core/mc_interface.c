@@ -100,6 +100,14 @@ static void MC_Cia402_HoldCurrentPosition(void)
 	g_axis.posCtrl.traj.inited = false;
 }
 
+static void MC_Cia402_LatchCspTarget(void)
+{
+	g_axis.posCtrl.fPosMeas = (float)MC_Cia402_GetActualPositionCounts();
+	g_axis.posCtrl.fPosRef = (float)s_cia402_target_position;
+	g_axis.posCtrl.traj.inited = false;
+	s_cia402_csp_target_pending = false;
+}
+
 static void MC_Cia402_HandleSyncTimeout(void)
 {
 	MC_Cia402_HoldCurrentPosition();
@@ -549,11 +557,13 @@ void MC_Cia402_OnSync(uint8_t syncCounter)
 
 	if (s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_POSITION)
 	{
-		g_axis.posCtrl.fPosMeas = (float)MC_Cia402_GetActualPositionCounts();
 		if (s_cia402_csp_target_pending)
 		{
-			g_axis.posCtrl.fPosRef = (float)s_cia402_target_position;
-			s_cia402_csp_target_pending = false;
+			MC_Cia402_LatchCspTarget();
+		}
+		else
+		{
+			g_axis.posCtrl.fPosMeas = (float)MC_Cia402_GetActualPositionCounts();
 		}
 	}
 	else if (s_cia402_mode == CIA402_MODE_PROFILE_POSITION)
@@ -953,6 +963,7 @@ bool MC_Cia402_WriteObject(uint16_t index, uint8_t subIndex,
 			}
 			{
 				int32_t targetPosition;
+
 				(void)memcpy(&targetPosition, value, 4U);
 				s_cia402_target_position = targetPosition;
 				if (s_cia402_mode == CIA402_MODE_CYCLIC_SYNC_POSITION)

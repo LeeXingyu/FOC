@@ -25,24 +25,24 @@
  * Keep these aligned with the SG position module so the runtime behavior
  * stays consistent after the port.
  */
-#define POSITION_GAIN_FAR_MIN               200.0f
-#define POSITION_GAIN_FAR_MAX               400.0f
-#define POSITION_GAIN_NEAR_MIN              400.0f
-#define POSITION_GAIN_NEAR_MAX              600.0f
-#define POSITION_GAIN_BLEND_INNER_COUNT     80.0f
-#define POSITION_GAIN_BLEND_OUTER_COUNT     400.0f
+#define POSITION_GAIN_FAR_MIN               80.0f
+#define POSITION_GAIN_FAR_MAX               160.0f
+#define POSITION_GAIN_NEAR_MIN              140.0f
+#define POSITION_GAIN_NEAR_MAX              220.0f
+#define POSITION_GAIN_BLEND_INNER_COUNT     40.0f
+#define POSITION_GAIN_BLEND_OUTER_COUNT     800.0f
 #define POSITION_TRAJ_DONE_COUNT            0.5f
 #define POSITION_OSC_CROSS_COUNT            15.0f
 #define POSITION_OSC_CALM_COUNT             10.0f
-#define POSITION_CAPTURE_ERROR_COUNT        200.0f
+#define POSITION_CAPTURE_ERROR_COUNT        120.0f
 #define POSITION_CAPTURE_HOLD_COUNT         2.0f
 #define POSITION_CAPTURE_FF_MAX_RPM         0.5f
-#define POSITION_CAPTURE_KI_NUMERATOR       6U
+#define POSITION_CAPTURE_KI_NUMERATOR       3U
 #define POSITION_CAPTURE_KI_DENOMINATOR     100U
-#define POSITION_CAPTURE_I_LIMIT_RPM        1.0f
+#define POSITION_CAPTURE_I_LIMIT_RPM        0.4f
 #define POSITION_CAPTURE_I_DECAY_TIME_S     0.05f
 #define POSITION_CAPTURE_ZERO_CROSS_DECAY   0.3f
-#define POSITION_CORRECTION_SLEW_RPM_PER_S  300.0f
+#define POSITION_CORRECTION_SLEW_RPM_PER_S  120.0f
 
 /* Default speed-loop PI gains. */
 #define SPEED_PI_DEFAULT_KP                 0.18f

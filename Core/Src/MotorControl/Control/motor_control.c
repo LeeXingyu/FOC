@@ -78,7 +78,7 @@ static void Speed_Pid_Init(void)
 static void Position_Pid_Init(void)
 {
     g_axis.posCtrl.positionHandle.Position_Gain = (uint32_t)POSITION_GAIN_FAR_MIN;
-    g_axis.posCtrl.positionHandle.Postiion_Div = (uint32_t)(10000U * ENC_COUNTS_PER_REV);
+    g_axis.posCtrl.positionHandle.Postiion_Div = (uint32_t)ENC_COUNTS_PER_REV;
     g_axis.posCtrl.positionHandle.pos_integral = 0.0f;
     g_axis.posCtrl.positionHandle.Position_Ki = POSITION_CAPTURE_KI_NUMERATOR;
     g_axis.posCtrl.positionHandle.Position_Ki_Div = POSITION_CAPTURE_KI_DENOMINATOR;
